@@ -93,6 +93,8 @@ Trainfitter.Lang.en = {
     history_ok         = "Downloaded",
     history_err        = "Error",
     language           = "Language",
+    col_title          = "Title",
+    col_size           = "Size",
 }
 
 Trainfitter.Lang.ru = {
@@ -182,6 +184,8 @@ Trainfitter.Lang.ru = {
     history_ok         = "Скачан",
     history_err        = "Ошибка",
     language           = "Язык",
+    col_title          = "Название",
+    col_size           = "Размер",
 }
 
 Trainfitter.Lang.da = {
@@ -271,6 +275,8 @@ Trainfitter.Lang.da = {
     history_ok         = "Hentet",
     history_err        = "Fejl",
     language           = "Sprog",
+    col_title          = "Titel",
+    col_size           = "Størrelse",
 }
 
 if CLIENT then

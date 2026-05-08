@@ -154,8 +154,7 @@ function Trainfitter.PurgeAllClient()
     hook.Run("Trainfitter.PersistentUpdated", {})
     hook.Run("Trainfitter.ActiveSkinChanged", nil)
 
-    chat.AddText(Color(150, 220, 255), "[Trainfitter] ", Color(230, 230, 230),
-        string.format("Local cache purged: %d previews, %d cached GMAs.", previews, gmas))
+    Trainfitter.ChatMsg(Trainfitter.L("purge_client_done", previews, gmas), COL_OK)
     return previews, gmas
 end
 
