@@ -403,13 +403,14 @@ function Trainfitter.ScanGMA(gmapath)
 
     f:Read(4)
 
-    local files          = {}
-    local entries        = {}
-    local skinFileCount  = 0
-    local maskFileCount  = 0
-    local materialsCount = 0
-    local luaFileCount   = 0
-    local totalBytes     = 0
+    local files            = {}
+    local entries          = {}
+    local skinFileCount    = 0
+    local maskFileCount    = 0
+    local materialsCount   = 0
+    local metroAssetCount  = 0
+    local luaFileCount     = 0
+    local totalBytes       = 0
 
     for i = 1, MAX_TOTAL_FILES + 1 do
         local filenum = read_u32(f)
@@ -499,6 +500,16 @@ function Trainfitter.ScanGMA(gmapath)
             materialsCount = materialsCount + 1
         end
 
+        if not isLua then
+            local startsAsset =
+                   string.sub(lower, 1, 10) == "materials/"
+                or string.sub(lower, 1,  7) == "models/"
+                or string.sub(lower, 1,  6) == "sound/"
+            if startsAsset and string.find(lower, "metrostroi", 1, true) then
+                metroAssetCount = metroAssetCount + 1
+            end
+        end
+
         table.insert(entries, {
             name       = name,
             size       = size,
@@ -508,12 +519,12 @@ function Trainfitter.ScanGMA(gmapath)
         })
     end
 
-    if skinFileCount == 0 and maskFileCount == 0 then
+    if skinFileCount == 0 and maskFileCount == 0 and metroAssetCount == 0 then
         f:Close()
         return false,
-            "not a Metrostroi train addon (no lua/metrostroi/skins/*.lua "
-            .. "or lua/metrostroi/masks/*.lua registration files found; materials="
-            .. materialsCount .. ")",
+            "not a Metrostroi addon (no lua/metrostroi/skins/*.lua, "
+            .. "no lua/metrostroi/masks/*.lua, and no materials/models/sound "
+            .. "with 'metrostroi' in path; materials=" .. materialsCount .. ")",
             files
     end
 
