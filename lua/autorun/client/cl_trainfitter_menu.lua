@@ -1301,8 +1301,11 @@ function Trainfitter.OpenMenu()
 
     local function RefreshActive()
         if not IsValid(activeLbl) then return end
-        local a = Trainfitter.ActiveSkin
-        if a and a.wsid then
+        local a    = Trainfitter.ActiveSkin
+        local lp   = LocalPlayer()
+        local mine = a and a.wsid and a.initiatorSid and a.initiatorSid ~= ""
+                    and IsValid(lp) and a.initiatorSid == lp:SteamID64()
+        if mine then
             local t = (a.title and a.title ~= "") and a.title or a.wsid
             activeLbl:SetText(t)
             activeLbl:SetVisible(true)

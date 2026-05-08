@@ -1248,13 +1248,31 @@ net.Receive(NET.DeleteSkin, function(len, ply)
         Audit(ply, "netspam_rejected", "NET.DeleteSkin len=" .. len)
         return
     end
-    if not Trainfitter.CanMakePersistent(ply) then
-        Notify(ply, "[Trainfitter] No permission to delete skins.", Color(255, 100, 100))
-        return
-    end
+    if not IsValid(ply) then return end
 
     local wsid = net.ReadString()
     if not IsValidWSID(wsid) then return end
+
+    local sid     = ply:SteamID64() or "0"
+    local isAdmin = Trainfitter.CanMakePersistent(ply) == true
+    local isOwner = false
+
+    if Trainfitter.ActiveSkin
+       and Trainfitter.ActiveSkin.wsid == wsid
+       and Trainfitter.ActiveSkin.initiatorSid == sid then
+        isOwner = true
+    end
+    local sb = Trainfitter.SessionBroadcast[wsid]
+    if not isOwner and istable(sb) and sb.initiatorSid == sid then
+        isOwner = true
+    end
+
+    if not isAdmin and not isOwner then
+        Notify(ply, "[Trainfitter] You can only remove skins you applied yourself.",
+            Color(255, 100, 100))
+        Audit(ply, "skin_delete_denied", wsid)
+        return
+    end
 
     for i = #Trainfitter.Persistent, 1, -1 do
         if Trainfitter.Persistent[i] == wsid then
@@ -1272,11 +1290,11 @@ net.Receive(NET.DeleteSkin, function(len, ply)
     Trainfitter.SessionBroadcast[wsid] = nil
     Trainfitter.MountedServer[wsid]    = nil
 
-    BroadcastForget(wsid, ply:SteamID64() or "")
+    BroadcastForget(wsid, sid)
 
     Notify(ply, "[Trainfitter] Skin " .. wsid .. " removed for all players.",
         Color(100, 255, 150))
-    Audit(ply, "skin_deleted", wsid)
+    Audit(ply, isAdmin and "skin_deleted_admin" or "skin_deleted_owner", wsid)
 end)
 
 net.Receive(NET.RequestList, function(_, ply)
