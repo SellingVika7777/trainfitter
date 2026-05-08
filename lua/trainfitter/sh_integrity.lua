@@ -53,10 +53,16 @@ end
 
 function Trainfitter.VerifyIntegrity()
     local missing = {}
+    local idx     = 0
     for _, path in ipairs(FILES_TO_CHECK) do
+        idx = idx + 1
         local ok, reason = CheckFileHeader(path)
         if not ok then
             table.insert(missing, { path = path, reason = reason })
+        end
+
+        if idx == 2 and #missing == 2 then
+            return true, missing, "interference"
         end
     end
     return #missing == 0, missing
@@ -68,9 +74,15 @@ local FORK_PATTERNS = {
     "%-%-%s*Modified%s+by%s+([^\r\n%.]+)",
 }
 
+local ok, missing, status = Trainfitter.VerifyIntegrity()
+Trainfitter.IntegrityFailed       = not ok
+Trainfitter.IntegrityInterference = status == "interference"
+
 local function ScanModifiers()
-    local seen   = {}
-    local order  = {}
+    if Trainfitter.IntegrityInterference then return {} end
+
+    local seen  = {}
+    local order = {}
     for _, path in ipairs(FILES_TO_CHECK) do
         local content = file.Read(path, "GAME")
         if isstring(content) and content ~= "" then
@@ -92,10 +104,16 @@ end
 
 Trainfitter.Modifiers = ScanModifiers()
 
-local ok, missing = Trainfitter.VerifyIntegrity()
-Trainfitter.IntegrityFailed = not ok
-
-if not ok then
+if status == "interference" then
+    MsgC(Color(255, 200,  80),
+        "[Trainfitter] file.Read returned unexpected content for our own files.\n")
+    MsgC(Color(255, 200,  80),
+        "[Trainfitter] Likely a third-party file protection / anti-leak addon\n")
+    MsgC(Color(255, 200,  80),
+        "[Trainfitter] (e.g. lenofag) detoured file.Open. Strict integrity check\n")
+    MsgC(Color(255, 200,  80),
+        "[Trainfitter] skipped — operating normally.\n")
+elseif not ok then
     MsgC(Color(255, 100, 100),
         "[Trainfitter] INTEGRITY FAIL — addon refuses to operate.\n")
     MsgC(Color(255, 100, 100),
