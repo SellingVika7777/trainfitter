@@ -97,23 +97,97 @@ function Trainfitter.ValidateMaskLua(content, displayPath)
 end
 
 local function ShallowCopy(t)
+    if not istable(t) then return t end
     local r = {}
     for k, v in pairs(t) do r[k] = v end
     return r
 end
 
+local function MakeMetrostroiView()
+    if not istable(Metrostroi) then return {} end
+    return {
+        AddSkin           = Metrostroi.AddSkin,
+        AddMask           = Metrostroi.AddMask,
+        RegisterSkin      = Metrostroi.RegisterSkin,
+        DefineSkin        = Metrostroi.DefineSkin,
+        RegisterMask      = Metrostroi.RegisterMask,
+        DefineMask        = Metrostroi.DefineMask,
+        AddLastStationTex = Metrostroi.AddLastStationTex,
+        Skins             = Metrostroi.Skins,
+        Masks             = Metrostroi.Masks,
+        TrainClasses      = Metrostroi.TrainClasses,
+    }
+end
+
+local function MakeNamespacedHook(prefix)
+    local function ns(id) return prefix .. "::" .. tostring(id) end
+    return {
+        Add = function(name, id, fn)
+            if not isstring(name) or not isfunction(fn) then return end
+            return hook.Add(name, ns(id), fn)
+        end,
+        Remove = function(name, id)
+            if not isstring(name) then return end
+            return hook.Remove(name, ns(id))
+        end,
+        Run      = hook.Run,
+        Call     = hook.Call,
+        GetTable = function()
+            local copy = {}
+            for ev, sub in pairs(hook.GetTable()) do
+                local s = {}
+                for id, fn in pairs(sub) do s[id] = fn end
+                copy[ev] = s
+            end
+            return copy
+        end,
+    }
+end
+
+local function MakeNamespacedTimer(prefix)
+    local function ns(name) return prefix .. "::" .. tostring(name) end
+    return {
+        Create   = function(name, ...) if not isstring(name) then return end return timer.Create(ns(name), ...) end,
+        Simple   = timer.Simple,
+        Exists   = function(name) if not isstring(name) then return false end return timer.Exists(ns(name)) end,
+        Remove   = function(name) if not isstring(name) then return end return timer.Remove(ns(name)) end,
+        Adjust   = function(name, ...) if not isstring(name) then return end return timer.Adjust(ns(name), ...) end,
+        Start    = function(name) if not isstring(name) then return end return timer.Start(ns(name)) end,
+        Stop     = function(name) if not isstring(name) then return end return timer.Stop(ns(name)) end,
+        Toggle   = function(name) if not isstring(name) then return end return timer.Toggle(ns(name)) end,
+        Pause    = function(name) if not isstring(name) then return end return timer.Pause(ns(name)) end,
+        UnPause  = function(name) if not isstring(name) then return end return timer.UnPause(ns(name)) end,
+        TimeLeft = function(name) if not isstring(name) then return 0  end return timer.TimeLeft(ns(name)) end,
+        RepsLeft = function(name) if not isstring(name) then return 0  end return timer.RepsLeft(ns(name)) end,
+    }
+end
+
+local function MakeScriptedEntsView()
+    return {
+        GetStored = scripted_ents.GetStored,
+        Get       = scripted_ents.Get,
+        GetList   = scripted_ents.GetList,
+    }
+end
+
+local function MakePathPrefix(path)
+    local s = tostring(path or "anon")
+    s = string.gsub(s, "[^%w_/.%-]", "_")
+    return "trainfitter_sb:" .. s
+end
+
 local function BuildSkinSandbox()
     local sb = {
-        Metrostroi = Metrostroi,
+        Metrostroi = MakeMetrostroiView(),
 
         Color  = Color,
         Vector = Vector,
         Angle  = Angle,
 
-        table  = table,
-        string = string,
-        math   = math,
-        bit    = bit,
+        table  = ShallowCopy(table),
+        string = ShallowCopy(string),
+        math   = ShallowCopy(math),
+        bit    = ShallowCopy(bit),
 
         IsValid    = IsValid,
         isnumber   = isnumber,
@@ -154,23 +228,23 @@ local function BuildSkinSandbox()
     return sb
 end
 
-local function BuildMaskSandbox()
+local function BuildMaskSandbox(prefix)
     local sb = BuildSkinSandbox()
 
-    sb.hook            = hook
-    sb.timer           = timer
-    sb.scripted_ents   = scripted_ents
-    sb.Entity          = Entity
-    sb.SafeRemoveEntity = SafeRemoveEntity
-    sb.FindMetaTable   = FindMetaTable
+    sb.hook              = MakeNamespacedHook(prefix)
+    sb.timer             = MakeNamespacedTimer(prefix)
+    sb.scripted_ents     = MakeScriptedEntsView()
+    sb.Entity            = Entity
+    sb.SafeRemoveEntity  = SafeRemoveEntity
+    sb.FindMetaTable     = FindMetaTable
 
     sb.ents = {
-        FindByClass     = ents.FindByClass,
-        FindInSphere    = ents.FindInSphere,
-        FindInBox       = ents.FindInBox,
-        GetAll          = ents.GetAll,
-        GetByIndex      = ents.GetByIndex,
-        GetCount        = ents.GetCount,
+        FindByClass  = ents.FindByClass,
+        FindInSphere = ents.FindInSphere,
+        FindInBox    = ents.FindInBox,
+        GetAll       = ents.GetAll,
+        GetByIndex   = ents.GetByIndex,
+        GetCount     = ents.GetCount,
     }
 
     sb.player = {
@@ -203,7 +277,8 @@ function Trainfitter.ExecSandboxed(content, path, kind)
     if isstring(fn) then return false, "compile: " .. fn end
     if not isfunction(fn) then return false, "compile returned non-function" end
 
-    local sb = (kind == "mask") and BuildMaskSandbox() or BuildSkinSandbox()
+    local prefix = MakePathPrefix(path)
+    local sb = (kind == "mask") and BuildMaskSandbox(prefix) or BuildSkinSandbox()
     if isfunction(setfenv) then
         local ok = pcall(setfenv, fn, sb)
         if not ok then return false, "setfenv failed" end
