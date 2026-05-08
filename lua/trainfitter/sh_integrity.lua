@@ -3,19 +3,35 @@
 
 Trainfitter = Trainfitter or {}
 
-local FILES_TO_CHECK = {
+local SHARED_FILES = {
     "lua/autorun/sh_trainfitter.lua",
     "lua/trainfitter/sh_config.lua",
     "lua/trainfitter/sh_lang.lua",
     "lua/trainfitter/sh_banner.lua",
     "lua/trainfitter/sh_gma_scan.lua",
     "lua/trainfitter/sh_integrity.lua",
-    "lua/autorun/server/sv_trainfitter.lua",
+}
+
+local CLIENT_FILES = {
     "lua/autorun/client/cl_trainfitter.lua",
     "lua/autorun/client/cl_trainfitter_menu.lua",
     "lua/autorun/client/cl_trainfitter_browser.lua",
     "lua/autorun/client/cl_trainfitter_desktop.lua",
 }
+
+local SERVER_FILES = {
+    "lua/autorun/server/sv_trainfitter.lua",
+}
+
+local FILES_TO_CHECK = {}
+for _, f in ipairs(SHARED_FILES) do table.insert(FILES_TO_CHECK, f) end
+if CLIENT then
+    for _, f in ipairs(CLIENT_FILES) do table.insert(FILES_TO_CHECK, f) end
+end
+if SERVER then
+    for _, f in ipairs(CLIENT_FILES) do table.insert(FILES_TO_CHECK, f) end
+    for _, f in ipairs(SERVER_FILES) do table.insert(FILES_TO_CHECK, f) end
+end
 
 local REQUIRED_AUTHOR_TAG  = "Made by SellingVika"
 local REQUIRED_PROJECT_TAG = "Trainfitter"
