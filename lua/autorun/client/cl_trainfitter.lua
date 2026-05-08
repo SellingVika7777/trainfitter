@@ -345,37 +345,31 @@ local function ProcessQueue()
             if kind then
                 local content = file.Read(fpath, "GAME")
                 if isstring(content) and #content > 0 then
+                    local sandboxKind = (kind == "autorun") and "mask" or "skin"
                     local validator = (kind == "autorun")
                                       and Trainfitter.ValidateMaskLua
                                       or  Trainfitter.ValidateSkinLua
-                    local scanOK, scanReason = true, nil
+                    local preOK, preReason = true, nil
                     if validator then
-                        scanOK, scanReason = validator(content, fpath)
+                        preOK, preReason = validator(content, fpath)
                     end
-                    if not scanOK then
+                    if not preOK then
                         MsgC(Color(255, 120, 120),
-                            "[Trainfitter] Refused " .. kind .. " file: " ..
-                            tostring(scanReason) .. "\n")
+                            "[Trainfitter] Refused " .. kind .. " file (preflight): " ..
+                            tostring(preReason) .. "\n")
                     else
-                        local fn, compileErr = CompileString(content, fpath, false)
-                        if isstring(fn) then
-                            MsgC(Color(255, 180, 80),
-                                "[Trainfitter] compile '" .. fpath ..
-                                "' failed: " .. fn .. "\n")
-                        elseif isfunction(fn) then
-                            local ok, runErr = pcall(fn)
-                            if ok then
-                                includedCount = includedCount + 1
-                                if kind == "skin" then
-                                    pathMetrostroi = pathMetrostroi + 1
-                                else
-                                    pathAutorun = pathAutorun + 1
-                                end
+                        local ok, err = Trainfitter.ExecSandboxed(content, fpath, sandboxKind)
+                        if ok then
+                            includedCount = includedCount + 1
+                            if kind == "skin" then
+                                pathMetrostroi = pathMetrostroi + 1
                             else
-                                MsgC(Color(255, 180, 80),
-                                    "[Trainfitter] exec '" .. fpath ..
-                                    "' failed: " .. tostring(runErr) .. "\n")
+                                pathAutorun = pathAutorun + 1
                             end
+                        else
+                            MsgC(Color(255, 180, 80),
+                                "[Trainfitter] sandboxed exec '" .. fpath ..
+                                "' failed: " .. tostring(err) .. "\n")
                         end
                     end
                 end

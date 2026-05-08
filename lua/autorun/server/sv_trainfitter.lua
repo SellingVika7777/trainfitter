@@ -426,29 +426,34 @@ local function ServerExecuteSkinFiles(files, wsid)
     local beforeSkins = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Skins) or {}
     local beforeMasks = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Masks) or {}
 
-    local function execFile(fp, validator)
-        validator = validator or Trainfitter.ValidateSkinLua
+    local function execFile(fp, kind)
         local c = file.Read(fp, "GAME")
         if not isstring(c) or #c == 0 then return false end
 
-        if validator
-           and Trainfitter.ShouldContentScan
-           and Trainfitter.ShouldContentScan() then
-            local ok, reason = validator(c, fp)
-            if not ok then
-                MsgC(Color(255, 120, 120),
-                    "[Trainfitter] Refused to execute lua file: "
-                    .. tostring(reason) .. "\n")
-                if Audit then
-                    pcall(Audit, nil, "lua_exec_rejected", tostring(reason))
-                end
-                return false
+        local pre, preErr = (kind == "mask")
+            and Trainfitter.ValidateMaskLua(c, fp)
+            or  Trainfitter.ValidateSkinLua(c, fp)
+        if not pre then
+            MsgC(Color(255, 120, 120),
+                "[Trainfitter] Refused lua file (preflight): "
+                .. tostring(preErr) .. "\n")
+            if Audit then
+                pcall(Audit, nil, "lua_preflight_rejected", tostring(preErr))
             end
+            return false
         end
 
-        local fn = CompileString(c, fp, false)
-        if isstring(fn) or not isfunction(fn) then return false end
-        return pcall(fn)
+        local ok, err = Trainfitter.ExecSandboxed(c, fp, kind)
+        if not ok then
+            MsgC(Color(255, 120, 120),
+                "[Trainfitter] Sandboxed exec failed for "
+                .. fp .. ": " .. tostring(err) .. "\n")
+            if Audit then
+                pcall(Audit, nil, "lua_sandbox_failed", fp .. " :: " .. tostring(err))
+            end
+            return false
+        end
+        return true
     end
 
     local hooksBefore = {}
@@ -464,10 +469,10 @@ local function ServerExecuteSkinFiles(files, wsid)
             local rel = string.sub(low, 5)
             if string.sub(low, 1, 21) == "lua/metrostroi/skins/"
                or string.sub(low, 1, 21) == "lua/metrostroi/masks/" then
-                if execFile(fpath, Trainfitter.ValidateSkinLua) then executed = executed + 1 end
+                if execFile(fpath, "skin") then executed = executed + 1 end
                 pcall(AddCSLuaFile, rel)
             elseif string.sub(low, 1, 12) == "lua/autorun/" then
-                if execFile(fpath, Trainfitter.ValidateMaskLua) then executed = executed + 1 end
+                if execFile(fpath, "mask") then executed = executed + 1 end
                 pcall(AddCSLuaFile, rel)
             end
         end

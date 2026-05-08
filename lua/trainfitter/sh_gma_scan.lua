@@ -71,185 +71,7 @@ local MAX_TOTAL_FILES        = 4096
 local MAX_LUA_FILES          = 256
 local MAX_TOTAL_LUA_BYTES    = 4 * 1024 * 1024
 
-local FORBIDDEN_PATTERNS = {
-    { pat = "RunString",                 label = "RunString"               },
-    { pat = "RunStringEx",               label = "RunStringEx"             },
-    { pat = "CompileString",             label = "CompileString"           },
-    { pat = "CompileFile",               label = "CompileFile"             },
-    { pat = "loadstring",                label = "loadstring"              },
-    { pat = "loadfile",                  label = "loadfile"                },
-    { pat = "dofile",                    label = "dofile"                  },
-    { pat = "dostring",                  label = "dostring"                },
-    { pat = "setfenv",                   label = "setfenv"                 },
-    { pat = "getfenv",                   label = "getfenv"                 },
-    { pat = "%f[%w]load%s*%(",           label = "load()"                  },
-    { pat = "%f[%w]xpcall%s*%(",         label = "xpcall()"                },
-    { pat = "string%.dump",              label = "string.dump"             },
-
-    { pat = "package%.loaded",           label = "package.loaded"          },
-    { pat = "package%.preload",          label = "package.preload"         },
-    { pat = "package%.loadlib",          label = "package.loadlib"         },
-    { pat = "package%.loaders",          label = "package.loaders"         },
-    { pat = "package%.searchers",        label = "package.searchers"       },
-    { pat = "package%.cpath",            label = "package.cpath"           },
-    { pat = "package%.path",             label = "package.path"            },
-    { pat = "package%.seeall",           label = "package.seeall"          },
-    { pat = "%f[%w]package%.",           label = "package.*"               },
-
-    { pat = "http%.",                    label = "http.*"                  },
-    { pat = "%f[%w_]http%f[^%w_]",       label = "http (namespace ref)"    },
-    { pat = "HTTP%s*%(",                 label = "HTTP()"                  },
-    { pat = "%f[%a]socket%.",            label = "socket.*"                },
-    { pat = "%f[%w_]socket%f[^%w_]",     label = "socket (namespace ref)"  },
-
-    { pat = "ffi%.",                     label = "ffi.*"                   },
-    { pat = "%f[%w_]ffi%f[^%w_]",        label = "ffi (LuaJIT FFI)"        },
-
-    { pat = "file%.Write",               label = "file.Write"              },
-    { pat = "file%.Append",              label = "file.Append"             },
-    { pat = "file%.Delete",              label = "file.Delete"             },
-    { pat = "file%.CreateDir",           label = "file.CreateDir"          },
-    { pat = "file%.Rename",              label = "file.Rename"             },
-    { pat = "%f[%w_]sql%f[^%w_]",        label = "sql (namespace ref)"     },
-    { pat = "sql%.",                     label = "sql.*"                   },
-    { pat = "cookie%.Set",               label = "cookie.Set"              },
-    { pat = "%f[%w_]cookie%f[^%w_]",     label = "cookie (persistence)"    },
-    { pat = "util%.SetPData",            label = "util.SetPData"           },
-    { pat = ":SetPData",                 label = ":SetPData"               },
-    { pat = "%f[%w_]io%f[^%w_]",         label = "io (stdlib I/O)"         },
-    { pat = "%f[%w_]os%f[^%w_]",         label = "os (stdlib process)"     },
-
-    { pat = "RunConsoleCommand",         label = "RunConsoleCommand"       },
-    { pat = "game%.ConsoleCommand",      label = "game.ConsoleCommand"     },
-    { pat = "cvars%.",                   label = "cvars.*"                 },
-    { pat = "CreateConVar",              label = "CreateConVar"            },
-    { pat = "CreateClientConVar",        label = "CreateClientConVar"      },
-    { pat = "os%.execute",               label = "os.execute"              },
-    { pat = "os%.exit",                  label = "os.exit"                 },
-    { pat = "os%.remove",                label = "os.remove"               },
-    { pat = "os%.rename",                label = "os.rename"               },
-    { pat = "os%.getenv",                label = "os.getenv"               },
-    { pat = "collectgarbage",            label = "collectgarbage"          },
-
-    { pat = "concommand%.Add",           label = "concommand.Add"          },
-    { pat = "concommand%.Run",           label = "concommand.Run"          },
-    { pat = "%f[%w_]concommand%f[^%w_]", label = "concommand (alias)"      },
-    { pat = "hook%.Add",                 label = "hook.Add"                },
-    { pat = "hook%.Remove",              label = "hook.Remove"             },
-    { pat = "hook%.Run",                 label = "hook.Run"                },
-    { pat = "hook%.Call",                label = "hook.Call"               },
-    { pat = "hook%.GetTable",            label = "hook.GetTable"           },
-    { pat = "%f[%w_]hook%f[^%w_]",       label = "hook (alias)"            },
-    { pat = "timer%.Create",             label = "timer.Create"            },
-    { pat = "timer%.Simple",             label = "timer.Simple"            },
-    { pat = "timer%.Adjust",             label = "timer.Adjust"            },
-    { pat = "%f[%w_]timer%f[^%w_]",      label = "timer (alias)"           },
-    { pat = "net%.Start",                label = "net.Start"               },
-    { pat = "net%.Send",                 label = "net.Send"                },
-    { pat = "net%.Broadcast",            label = "net.Broadcast"           },
-    { pat = "net%.Receive",              label = "net.Receive"             },
-    { pat = "net%.WriteData",            label = "net.WriteData"           },
-    { pat = "%f[%w_]net%f[^%w_]",        label = "net (alias)"             },
-    { pat = "util%.AddNetworkString",    label = "util.AddNetworkString"   },
-    { pat = "%f[%w_]coroutine%f[^%w_]",  label = "coroutine (uncommon)"    },
-    { pat = "coroutine%.",               label = "coroutine.*"             },
-    { pat = "usermessage%.",             label = "usermessage.*"           },
-    { pat = "%f[%w]umsg%.",              label = "umsg.*"                  },
-    { pat = "datastream%.",              label = "datastream.*"            },
-    { pat = "gamemode%.Call",            label = "gamemode.Call"           },
-    { pat = "gamemode%.Register",        label = "gamemode.Register"       },
-    { pat = "gmod%.GetGamemode",         label = "gmod.GetGamemode"        },
-
-    { pat = "ents%.Create",              label = "ents.Create"             },
-    { pat = "ents%.FindByClass",         label = "ents.FindByClass"        },
-    { pat = "ents%.FindInSphere",        label = "ents.FindInSphere"       },
-    { pat = "scripted_ents%.",           label = "scripted_ents.*"         },
-    { pat = "weapons%.Register",         label = "weapons.Register"        },
-    { pat = "%f[%w]list%.Add",           label = "list.Add"                },
-    { pat = "%f[%w]list%.Set",           label = "list.Set"                },
-    { pat = "properties%.Add",           label = "properties.Add"          },
-    { pat = "spawnmenu%.",               label = "spawnmenu.*"             },
-    { pat = "%f[%w]tool%.",              label = "tool.*"                  },
-
-    { pat = "vgui%.Create",              label = "vgui.Create"             },
-    { pat = "vgui%.Register",            label = "vgui.Register"           },
-    { pat = "vgui%.RegisterFile",        label = "vgui.RegisterFile"       },
-
-    { pat = ":Kick%s*%(",                label = ":Kick()"                 },
-    { pat = ":Ban%s*%(",                 label = ":Ban()"                  },
-    { pat = ":Kill%s*%(",                label = ":Kill()"                 },
-    { pat = ":StripWeapons",             label = ":StripWeapons"           },
-    { pat = ":StripAmmo",                label = ":StripAmmo"              },
-    { pat = ":Give%s*%(",                label = ":Give()"                 },
-    { pat = ":ConCommand",               label = ":ConCommand"             },
-    { pat = ":SendLua",                  label = ":SendLua"                },
-    { pat = ":Freeze%s*%(",              label = ":Freeze()"               },
-    { pat = ":Spawn%s*%(",               label = ":Spawn()"                },
-    { pat = ":SetPos",                   label = ":SetPos"                 },
-    { pat = "%f[%w]player%.GetAll",      label = "player.GetAll"           },
-    { pat = "%f[%w]player%.GetByID",     label = "player.GetByID"          },
-
-    { pat = "_G%[",                      label = "_G[...]"                 },
-    { pat = "_G%.",                      label = "_G.*"                    },
-    { pat = "%f[%w_]_G%f[^%w_]",         label = "_G (global env)"         },
-    { pat = "%f[%w_]package%f[^%w_]",    label = "package (module system)" },
-    { pat = "%f[%w_]debug%f[^%w_]",      label = "debug (introspection)"   },
-    { pat = "%f[%w_]jit%f[^%w_]",        label = "jit (LuaJIT internals)"  },
-    { pat = "%f[%w_]getfenv%f[^%w_]",    label = "getfenv"                 },
-    { pat = "%f[%w_]setfenv%f[^%w_]",    label = "setfenv"                 },
-    { pat = "_ENV",                      label = "_ENV"                    },
-    { pat = "getmetatable",              label = "getmetatable"            },
-    { pat = "setmetatable",              label = "setmetatable"            },
-    { pat = "debug%.",                   label = "debug.*"                 },
-    { pat = "jit%.",                     label = "jit.*"                   },
-    { pat = "rawget",                    label = "rawget"                  },
-    { pat = "rawset",                    label = "rawset"                  },
-    { pat = "rawequal",                  label = "rawequal"                },
-    { pat = "rawlen",                    label = "rawlen"                  },
-    { pat = "%f[%w]system%.",            label = "system.*"                },
-    { pat = "%f[%w]engine%.",            label = "engine.*"                },
-
-    { pat = "%f[%w]include%s*%(",        label = "include()"               },
-    { pat = "AddCSLuaFile",               label = "AddCSLuaFile"           },
-    { pat = "%f[%w]require%s*%(",        label = "require()"               },
-    { pat = "%f[%w]module%s*%(",         label = "module()"                },
-
-    { pat = "string%.char",              label = "string.char"             },
-    { pat = "string%.byte",              label = "string.byte"             },
-    { pat = "string%.rep",               label = "string.rep"              },
-    { pat = "bit%.bxor",                 label = "bit.bxor"                },
-    { pat = "bit%.lshift",               label = "bit.lshift"              },
-    { pat = "bit%.rshift",               label = "bit.rshift"              },
-    { pat = "bit%.band",                 label = "bit.band"                },
-    { pat = "bit%.bor",                  label = "bit.bor"                 },
-}
-
-local REQUIRED_MARKERS = {
-    "Metrostroi%.Skins",
-    "Metrostroi%.RegisterSkin",
-    "Metrostroi%.DefineSkin",
-    "Metrostroi%.AddSkin",
-    "Metrostroi%.Masks",
-    "Metrostroi%.RegisterMask",
-    "Metrostroi%.AddMask",
-    "Metrostroi%.DefineMask",
-}
-
-local function NormalizeForScanning(s)
-    s = string.gsub(s, "%-%-%[%[.-%]%]", " ")
-    s = string.gsub(s, "%-%-[^\n]*",      " ")
-
-    s = string.gsub(s, '"[^"\n]*"',      '""')
-    s = string.gsub(s, "'[^'\n]*'",      "''")
-    s = string.gsub(s, "%[=-%[.-%]=-%]", "[[]]")
-
-    s = string.gsub(s, "%s+", " ")
-
-    s = string.gsub(s, " ?([%.%[%]%(%),;=:]) ?", "%1")
-    return s
-end
-
-function Trainfitter.ValidateSkinLua(content, displayPath)
+local function PreflightCheck(content, displayPath)
     if not isstring(content) or #content == 0 then
         return false, "empty lua file: " .. tostring(displayPath)
     end
@@ -258,143 +80,137 @@ function Trainfitter.ValidateSkinLua(content, displayPath)
             "lua file too large: %s (%d B, max %d B)",
             tostring(displayPath), #content, MAX_LUA_FILE_SIZE)
     end
-
     for i = 1, math.min(#content, 4096) do
-        local b = string.byte(content, i)
-        if b == 0 then
+        if string.byte(content, i) == 0 then
             return false, "NUL byte in " .. tostring(displayPath)
         end
     end
-
-    local normalized = NormalizeForScanning(content)
-
-    for _, p in ipairs(FORBIDDEN_PATTERNS) do
-        if string.find(normalized, p.pat) then
-            return false, string.format(
-                "forbidden API in skin file %s: %s",
-                tostring(displayPath), p.label)
-        end
-    end
-
-    local hasMarker = false
-    for _, m in ipairs(REQUIRED_MARKERS) do
-        if string.find(normalized, m) then hasMarker = true break end
-    end
-    if not hasMarker then
-        return false, "missing Metrostroi.Skins/Metrostroi.Masks registration in "
-            .. tostring(displayPath)
-    end
-
     return true
 end
 
-local MASK_FORBIDDEN_PATTERNS = {
-    { pat = "RunString",                 label = "RunString"               },
-    { pat = "RunStringEx",               label = "RunStringEx"             },
-    { pat = "CompileString",             label = "CompileString"           },
-    { pat = "CompileFile",               label = "CompileFile"             },
-    { pat = "loadstring",                label = "loadstring"              },
-    { pat = "loadfile",                  label = "loadfile"                },
-    { pat = "dofile",                    label = "dofile"                  },
-    { pat = "%f[%w]load%s*%(",           label = "load()"                  },
-    { pat = "string%.dump",              label = "string.dump"             },
-    { pat = "setfenv",                   label = "setfenv"                 },
-    { pat = "getfenv",                   label = "getfenv"                 },
-    { pat = "_ENV",                      label = "_ENV"                    },
-
-    { pat = "_G%[",                      label = "_G[...]"                 },
-    { pat = "_G%.",                      label = "_G.*"                    },
-    { pat = "%f[%w_]_G%f[^%w_]",         label = "_G (global env)"         },
-    { pat = "%f[%w_]debug%f[^%w_]",      label = "debug (introspection)"   },
-    { pat = "%f[%w_]jit%f[^%w_]",        label = "jit (LuaJIT internals)"  },
-    { pat = "debug%.",                   label = "debug.*"                 },
-    { pat = "jit%.",                     label = "jit.*"                   },
-
-    { pat = "http%.",                    label = "http.*"                  },
-    { pat = "%f[%w_]http%f[^%w_]",       label = "http (namespace ref)"    },
-    { pat = "HTTP%s*%(",                 label = "HTTP()"                  },
-    { pat = "net%.Start",                label = "net.Start"               },
-    { pat = "net%.Send",                 label = "net.Send"                },
-    { pat = "net%.Broadcast",            label = "net.Broadcast"           },
-    { pat = "net%.Receive",              label = "net.Receive"             },
-    { pat = "net%.WriteData",            label = "net.WriteData"           },
-    { pat = "util%.AddNetworkString",    label = "util.AddNetworkString"   },
-    { pat = "%f[%a]socket%.",            label = "socket.*"                },
-
-    { pat = "file%.Write",               label = "file.Write"              },
-    { pat = "file%.Append",              label = "file.Append"             },
-    { pat = "file%.Delete",              label = "file.Delete"             },
-    { pat = "file%.CreateDir",           label = "file.CreateDir"          },
-    { pat = "file%.Rename",              label = "file.Rename"             },
-    { pat = "%f[%w_]sql%f[^%w_]",        label = "sql (namespace ref)"     },
-    { pat = "sql%.",                     label = "sql.*"                   },
-
-    { pat = "ffi%.",                     label = "ffi.*"                   },
-    { pat = "%f[%w_]ffi%f[^%w_]",        label = "ffi (LuaJIT FFI)"        },
-    { pat = "%f[%w_]io%f[^%w_]",         label = "io (stdlib I/O)"         },
-    { pat = "%f[%w_]os%f[^%w_]",         label = "os (stdlib process)"     },
-    { pat = "os%.execute",               label = "os.execute"              },
-    { pat = "os%.exit",                  label = "os.exit"                 },
-    { pat = "os%.remove",                label = "os.remove"               },
-    { pat = "os%.rename",                label = "os.rename"               },
-
-    { pat = ":Kick%s*%(",                label = ":Kick()"                 },
-    { pat = ":Ban%s*%(",                 label = ":Ban()"                  },
-
-    { pat = "RunConsoleCommand",         label = "RunConsoleCommand"       },
-    { pat = "game%.ConsoleCommand",      label = "game.ConsoleCommand"     },
-    { pat = "cvars%.",                   label = "cvars.*"                 },
-    { pat = "concommand%.Add",           label = "concommand.Add"          },
-
-    { pat = "AddCSLuaFile",              label = "AddCSLuaFile"            },
-    { pat = "%f[%w]include%s*%(",        label = "include()"               },
-    { pat = "%f[%w]require%s*%(",        label = "require()"               },
-    { pat = "%f[%w]module%s*%(",         label = "module()"                },
-
-    { pat = "package%.loaded",           label = "package.loaded"          },
-    { pat = "package%.preload",          label = "package.preload"         },
-    { pat = "package%.loadlib",          label = "package.loadlib"         },
-    { pat = "package%.cpath",            label = "package.cpath"           },
-    { pat = "package%.path",             label = "package.path"            },
-    { pat = "%f[%w_]package%f[^%w_]",    label = "package (module system)" },
-
-    { pat = "ents%.Create",              label = "ents.Create"             },
-    { pat = "scripted_ents%.Register",   label = "scripted_ents.Register"  },
-    { pat = "weapons%.Register",         label = "weapons.Register"        },
-    { pat = "vgui%.Register",            label = "vgui.Register"           },
-    { pat = "vgui%.RegisterFile",        label = "vgui.RegisterFile"       },
-
-    { pat = "gamemode%.Call",            label = "gamemode.Call"           },
-    { pat = "gamemode%.Register",        label = "gamemode.Register"       },
-}
+function Trainfitter.ValidateSkinLua(content, displayPath)
+    return PreflightCheck(content, displayPath)
+end
 
 function Trainfitter.ValidateMaskLua(content, displayPath)
+    return PreflightCheck(content, displayPath)
+end
+
+local function ShallowCopy(t)
+    local r = {}
+    for k, v in pairs(t) do r[k] = v end
+    return r
+end
+
+local function BuildSkinSandbox()
+    local sb = {
+        Metrostroi = Metrostroi,
+
+        Color  = Color,
+        Vector = Vector,
+        Angle  = Angle,
+
+        table  = table,
+        string = string,
+        math   = math,
+        bit    = bit,
+
+        IsValid    = IsValid,
+        isnumber   = isnumber,
+        isstring   = isstring,
+        istable    = istable,
+        isbool     = isbool,
+        isfunction = isfunction,
+        isvector   = isvector,
+        isangle    = isangle,
+        isentity   = isentity,
+        isnan      = isnan,
+        isinf      = isinf,
+
+        type        = type,
+        tostring    = tostring,
+        tonumber    = tonumber,
+        ErrorNoHalt = ErrorNoHalt,
+        Format      = Format,
+
+        pairs   = pairs,
+        ipairs  = ipairs,
+        next    = next,
+        select  = select,
+        unpack  = unpack,
+
+        pcall  = pcall,
+        error  = error,
+        assert = assert,
+
+        SERVER = SERVER,
+        CLIENT = CLIENT,
+
+        Material = Material,
+        AddCSLuaFile = function() end,
+        print = function() end,
+    }
+    sb._G = sb
+    return sb
+end
+
+local function BuildMaskSandbox()
+    local sb = BuildSkinSandbox()
+
+    sb.hook            = hook
+    sb.timer           = timer
+    sb.scripted_ents   = scripted_ents
+    sb.Entity          = Entity
+    sb.SafeRemoveEntity = SafeRemoveEntity
+    sb.FindMetaTable   = FindMetaTable
+
+    sb.ents = {
+        FindByClass     = ents.FindByClass,
+        FindInSphere    = ents.FindInSphere,
+        FindInBox       = ents.FindInBox,
+        GetAll          = ents.GetAll,
+        GetByIndex      = ents.GetByIndex,
+        GetCount        = ents.GetCount,
+    }
+
+    sb.player = {
+        GetAll         = player.GetAll,
+        GetHumans      = player.GetHumans,
+        GetBots        = player.GetBots,
+        GetByID        = player.GetByID,
+        GetBySteamID   = player.GetBySteamID,
+        GetBySteamID64 = player.GetBySteamID64,
+        GetCount       = player.GetCount,
+    }
+
+    sb.print       = print
+    sb.MsgC        = MsgC
+    sb.Msg         = Msg
+    sb.MsgN        = MsgN
+    sb.PrintTable  = PrintTable
+
+    sb.getmetatable = getmetatable
+
+    sb._G = sb
+    return sb
+end
+
+function Trainfitter.ExecSandboxed(content, path, kind)
     if not isstring(content) or #content == 0 then
-        return false, "empty lua file: " .. tostring(displayPath)
+        return false, "empty content"
     end
-    if #content > MAX_LUA_FILE_SIZE then
-        return false, string.format(
-            "lua file too large: %s (%d B, max %d B)",
-            tostring(displayPath), #content, MAX_LUA_FILE_SIZE)
-    end
+    local fn, compileErr = CompileString(content, path, false)
+    if isstring(fn) then return false, "compile: " .. fn end
+    if not isfunction(fn) then return false, "compile returned non-function" end
 
-    for i = 1, math.min(#content, 4096) do
-        local b = string.byte(content, i)
-        if b == 0 then
-            return false, "NUL byte in " .. tostring(displayPath)
-        end
+    local sb = (kind == "mask") and BuildMaskSandbox() or BuildSkinSandbox()
+    if isfunction(setfenv) then
+        local ok = pcall(setfenv, fn, sb)
+        if not ok then return false, "setfenv failed" end
     end
 
-    local normalized = NormalizeForScanning(content)
-
-    for _, p in ipairs(MASK_FORBIDDEN_PATTERNS) do
-        if string.find(normalized, p.pat) then
-            return false, string.format(
-                "forbidden API in mask/autorun file %s: %s",
-                tostring(displayPath), p.label)
-        end
-    end
-
+    local ok, runErr = pcall(fn)
+    if not ok then return false, "runtime: " .. tostring(runErr) end
     return true
 end
 
