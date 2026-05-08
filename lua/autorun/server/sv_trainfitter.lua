@@ -426,20 +426,21 @@ local function ServerExecuteSkinFiles(files, wsid)
     local beforeSkins = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Skins) or {}
     local beforeMasks = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Masks) or {}
 
-    local function execFile(fp)
+    local function execFile(fp, validator)
+        validator = validator or Trainfitter.ValidateSkinLua
         local c = file.Read(fp, "GAME")
         if not isstring(c) or #c == 0 then return false end
 
-        if Trainfitter.ValidateSkinLua
+        if validator
            and Trainfitter.ShouldContentScan
            and Trainfitter.ShouldContentScan() then
-            local ok, reason = Trainfitter.ValidateSkinLua(c, fp)
+            local ok, reason = validator(c, fp)
             if not ok then
                 MsgC(Color(255, 120, 120),
-                    "[Trainfitter] Refused to execute skin file: "
+                    "[Trainfitter] Refused to execute lua file: "
                     .. tostring(reason) .. "\n")
                 if Audit then
-                    pcall(Audit, nil, "skin_exec_rejected", tostring(reason))
+                    pcall(Audit, nil, "lua_exec_rejected", tostring(reason))
                 end
                 return false
             end
@@ -450,6 +451,12 @@ local function ServerExecuteSkinFiles(files, wsid)
         return pcall(fn)
     end
 
+    local hooksBefore = {}
+    do
+        local t = hook.GetTable()["InitPostEntity"]
+        if istable(t) then for n in pairs(t) do hooksBefore[n] = true end end
+    end
+
     local executed = 0
     for _, fpath in ipairs(files) do
         if isstring(fpath) and string.sub(string.lower(fpath), -4) == ".lua" then
@@ -457,8 +464,27 @@ local function ServerExecuteSkinFiles(files, wsid)
             local rel = string.sub(low, 5)
             if string.sub(low, 1, 21) == "lua/metrostroi/skins/"
                or string.sub(low, 1, 21) == "lua/metrostroi/masks/" then
-                if execFile(fpath) then executed = executed + 1 end
+                if execFile(fpath, Trainfitter.ValidateSkinLua) then executed = executed + 1 end
                 pcall(AddCSLuaFile, rel)
+            elseif string.sub(low, 1, 12) == "lua/autorun/" then
+                if execFile(fpath, Trainfitter.ValidateMaskLua) then executed = executed + 1 end
+                pcall(AddCSLuaFile, rel)
+            end
+        end
+    end
+
+    do
+        local t = hook.GetTable()["InitPostEntity"]
+        if istable(t) then
+            for name, fn in pairs(t) do
+                if not hooksBefore[name] and isfunction(fn) then
+                    local ok, err = pcall(fn)
+                    if not ok then
+                        MsgC(Color(255, 180, 80), string.format(
+                            "[Trainfitter] Late-fire InitPostEntity hook '%s' from %s failed: %s\n",
+                            tostring(name), tostring(wsid), tostring(err)))
+                    end
+                end
             end
         end
     end

@@ -36,6 +36,7 @@ local DATA_PREFIXES = {
 local LUA_ALLOWED_PREFIXES = {
     "lua/metrostroi/skins/",
     "lua/metrostroi/masks/",
+    "lua/autorun/",
 }
 
 local ALLOWED_EXACT = {
@@ -287,6 +288,116 @@ function Trainfitter.ValidateSkinLua(content, displayPath)
     return true
 end
 
+local MASK_FORBIDDEN_PATTERNS = {
+    { pat = "RunString",                 label = "RunString"               },
+    { pat = "RunStringEx",               label = "RunStringEx"             },
+    { pat = "CompileString",             label = "CompileString"           },
+    { pat = "CompileFile",               label = "CompileFile"             },
+    { pat = "loadstring",                label = "loadstring"              },
+    { pat = "loadfile",                  label = "loadfile"                },
+    { pat = "dofile",                    label = "dofile"                  },
+    { pat = "%f[%w]load%s*%(",           label = "load()"                  },
+    { pat = "string%.dump",              label = "string.dump"             },
+    { pat = "setfenv",                   label = "setfenv"                 },
+    { pat = "getfenv",                   label = "getfenv"                 },
+    { pat = "_ENV",                      label = "_ENV"                    },
+
+    { pat = "_G%[",                      label = "_G[...]"                 },
+    { pat = "_G%.",                      label = "_G.*"                    },
+    { pat = "%f[%w_]_G%f[^%w_]",         label = "_G (global env)"         },
+    { pat = "%f[%w_]debug%f[^%w_]",      label = "debug (introspection)"   },
+    { pat = "%f[%w_]jit%f[^%w_]",        label = "jit (LuaJIT internals)"  },
+    { pat = "debug%.",                   label = "debug.*"                 },
+    { pat = "jit%.",                     label = "jit.*"                   },
+
+    { pat = "http%.",                    label = "http.*"                  },
+    { pat = "%f[%w_]http%f[^%w_]",       label = "http (namespace ref)"    },
+    { pat = "HTTP%s*%(",                 label = "HTTP()"                  },
+    { pat = "net%.Start",                label = "net.Start"               },
+    { pat = "net%.Send",                 label = "net.Send"                },
+    { pat = "net%.Broadcast",            label = "net.Broadcast"           },
+    { pat = "net%.Receive",              label = "net.Receive"             },
+    { pat = "net%.WriteData",            label = "net.WriteData"           },
+    { pat = "util%.AddNetworkString",    label = "util.AddNetworkString"   },
+    { pat = "%f[%a]socket%.",            label = "socket.*"                },
+
+    { pat = "file%.Write",               label = "file.Write"              },
+    { pat = "file%.Append",              label = "file.Append"             },
+    { pat = "file%.Delete",              label = "file.Delete"             },
+    { pat = "file%.CreateDir",           label = "file.CreateDir"          },
+    { pat = "file%.Rename",              label = "file.Rename"             },
+    { pat = "%f[%w_]sql%f[^%w_]",        label = "sql (namespace ref)"     },
+    { pat = "sql%.",                     label = "sql.*"                   },
+
+    { pat = "ffi%.",                     label = "ffi.*"                   },
+    { pat = "%f[%w_]ffi%f[^%w_]",        label = "ffi (LuaJIT FFI)"        },
+    { pat = "%f[%w_]io%f[^%w_]",         label = "io (stdlib I/O)"         },
+    { pat = "%f[%w_]os%f[^%w_]",         label = "os (stdlib process)"     },
+    { pat = "os%.execute",               label = "os.execute"              },
+    { pat = "os%.exit",                  label = "os.exit"                 },
+    { pat = "os%.remove",                label = "os.remove"               },
+    { pat = "os%.rename",                label = "os.rename"               },
+
+    { pat = ":Kick%s*%(",                label = ":Kick()"                 },
+    { pat = ":Ban%s*%(",                 label = ":Ban()"                  },
+
+    { pat = "RunConsoleCommand",         label = "RunConsoleCommand"       },
+    { pat = "game%.ConsoleCommand",      label = "game.ConsoleCommand"     },
+    { pat = "cvars%.",                   label = "cvars.*"                 },
+    { pat = "concommand%.Add",           label = "concommand.Add"          },
+
+    { pat = "AddCSLuaFile",              label = "AddCSLuaFile"            },
+    { pat = "%f[%w]include%s*%(",        label = "include()"               },
+    { pat = "%f[%w]require%s*%(",        label = "require()"               },
+    { pat = "%f[%w]module%s*%(",         label = "module()"                },
+
+    { pat = "package%.loaded",           label = "package.loaded"          },
+    { pat = "package%.preload",          label = "package.preload"         },
+    { pat = "package%.loadlib",          label = "package.loadlib"         },
+    { pat = "package%.cpath",            label = "package.cpath"           },
+    { pat = "package%.path",             label = "package.path"            },
+    { pat = "%f[%w_]package%f[^%w_]",    label = "package (module system)" },
+
+    { pat = "ents%.Create",              label = "ents.Create"             },
+    { pat = "scripted_ents%.Register",   label = "scripted_ents.Register"  },
+    { pat = "weapons%.Register",         label = "weapons.Register"        },
+    { pat = "vgui%.Register",            label = "vgui.Register"           },
+    { pat = "vgui%.RegisterFile",        label = "vgui.RegisterFile"       },
+
+    { pat = "gamemode%.Call",            label = "gamemode.Call"           },
+    { pat = "gamemode%.Register",        label = "gamemode.Register"       },
+}
+
+function Trainfitter.ValidateMaskLua(content, displayPath)
+    if not isstring(content) or #content == 0 then
+        return false, "empty lua file: " .. tostring(displayPath)
+    end
+    if #content > MAX_LUA_FILE_SIZE then
+        return false, string.format(
+            "lua file too large: %s (%d B, max %d B)",
+            tostring(displayPath), #content, MAX_LUA_FILE_SIZE)
+    end
+
+    for i = 1, math.min(#content, 4096) do
+        local b = string.byte(content, i)
+        if b == 0 then
+            return false, "NUL byte in " .. tostring(displayPath)
+        end
+    end
+
+    local normalized = NormalizeForScanning(content)
+
+    for _, p in ipairs(MASK_FORBIDDEN_PATTERNS) do
+        if string.find(normalized, p.pat) then
+            return false, string.format(
+                "forbidden API in mask/autorun file %s: %s",
+                tostring(displayPath), p.label)
+        end
+    end
+
+    return true
+end
+
 local function read_cstr(f, maxlen)
     if not f then return "" end
     maxlen = maxlen or 128
@@ -463,10 +574,11 @@ function Trainfitter.ScanGMA(gmapath)
                 files
         end
 
-        local isLua      = (ext == "lua")
-        local addonPref  = isLua and is_lua_addon_path(lower) or nil
-        local isAddonLua = addonPref ~= nil
-        local isMaskLua  = addonPref == "lua/metrostroi/masks/"
+        local isLua       = (ext == "lua")
+        local addonPref   = isLua and is_lua_addon_path(lower) or nil
+        local isAddonLua  = addonPref ~= nil
+        local isMaskLua   = addonPref == "lua/metrostroi/masks/"
+        local isAutorunLua = addonPref == "lua/autorun/"
 
         if not isLua and not is_allowed_path(lower, false) then
             f:Close()
@@ -494,7 +606,7 @@ function Trainfitter.ScanGMA(gmapath)
 
         if isMaskLua then
             maskFileCount = maskFileCount + 1
-        elseif isAddonLua then
+        elseif isAddonLua and not isAutorunLua then
             skinFileCount = skinFileCount + 1
         elseif string.sub(lower, 1, 10) == "materials/" then
             materialsCount = materialsCount + 1
@@ -511,11 +623,12 @@ function Trainfitter.ScanGMA(gmapath)
         end
 
         table.insert(entries, {
-            name       = name,
-            size       = size,
-            isLua      = isLua,
-            isAddonLua = isAddonLua,
-            isMaskLua  = isMaskLua,
+            name        = name,
+            size        = size,
+            isLua       = isLua,
+            isAddonLua  = isAddonLua,
+            isMaskLua   = isMaskLua,
+            isAutorunLua = isAutorunLua,
         })
     end
 
@@ -543,7 +656,10 @@ function Trainfitter.ScanGMA(gmapath)
                 f:Close()
                 return false, "truncated lua body for " .. e.name, files
             end
-            local ok, reason = Trainfitter.ValidateSkinLua(body, e.name)
+            local validator = e.isAutorunLua
+                              and Trainfitter.ValidateMaskLua
+                              or  Trainfitter.ValidateSkinLua
+            local ok, reason = validator(body, e.name)
             if not ok then
                 f:Close()
                 return false, reason, files

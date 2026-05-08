@@ -320,25 +320,41 @@ local function ProcessQueue()
 
         if isbool(files) then files = {} end
 
-        local function ShouldInclude(fpath)
+        local function ClassifyFile(fpath)
             local low = string.lower(fpath)
-            if string.sub(low, -4) ~= ".lua" then return false end
-            return string.sub(low, 1, 21) == "lua/metrostroi/skins/"
-                or string.sub(low, 1, 21) == "lua/metrostroi/masks/"
+            if string.sub(low, -4) ~= ".lua" then return nil end
+            if string.sub(low, 1, 21) == "lua/metrostroi/skins/"
+               or string.sub(low, 1, 21) == "lua/metrostroi/masks/" then
+                return "skin"
+            end
+            if string.sub(low, 1, 12) == "lua/autorun/" then
+                return "autorun"
+            end
+            return nil
+        end
+
+        local hooksBefore = {}
+        do
+            local t = hook.GetTable()["InitPostEntity"]
+            if istable(t) then for n in pairs(t) do hooksBefore[n] = true end end
         end
 
         local includedCount, pathMetrostroi, pathAutorun = 0, 0, 0
         for _, fpath in ipairs(files or {}) do
-            if isstring(fpath) and ShouldInclude(fpath) then
+            local kind = isstring(fpath) and ClassifyFile(fpath) or nil
+            if kind then
                 local content = file.Read(fpath, "GAME")
                 if isstring(content) and #content > 0 then
+                    local validator = (kind == "autorun")
+                                      and Trainfitter.ValidateMaskLua
+                                      or  Trainfitter.ValidateSkinLua
                     local scanOK, scanReason = true, nil
-                    if Trainfitter.ValidateSkinLua then
-                        scanOK, scanReason = Trainfitter.ValidateSkinLua(content, fpath)
+                    if validator then
+                        scanOK, scanReason = validator(content, fpath)
                     end
                     if not scanOK then
                         MsgC(Color(255, 120, 120),
-                            "[Trainfitter] Refused skin file: " ..
+                            "[Trainfitter] Refused " .. kind .. " file: " ..
                             tostring(scanReason) .. "\n")
                     else
                         local fn, compileErr = CompileString(content, fpath, false)
@@ -350,9 +366,7 @@ local function ProcessQueue()
                             local ok, runErr = pcall(fn)
                             if ok then
                                 includedCount = includedCount + 1
-                                local lowFP = string.lower(fpath)
-                                if string.find(lowFP, "lua/metrostroi/skins/", 1, true)
-                                   or string.find(lowFP, "lua/metrostroi/masks/", 1, true) then
+                                if kind == "skin" then
                                     pathMetrostroi = pathMetrostroi + 1
                                 else
                                     pathAutorun = pathAutorun + 1
@@ -362,6 +376,22 @@ local function ProcessQueue()
                                     "[Trainfitter] exec '" .. fpath ..
                                     "' failed: " .. tostring(runErr) .. "\n")
                             end
+                        end
+                    end
+                end
+            end
+        end
+
+        do
+            local t = hook.GetTable()["InitPostEntity"]
+            if istable(t) then
+                for name, fn in pairs(t) do
+                    if not hooksBefore[name] and isfunction(fn) then
+                        local ok, err = pcall(fn)
+                        if not ok then
+                            MsgC(Color(255, 180, 80), string.format(
+                                "[Trainfitter] Late-fire InitPostEntity hook '%s' from %s failed: %s\n",
+                                tostring(name), tostring(wsid), tostring(err)))
                         end
                     end
                 end
