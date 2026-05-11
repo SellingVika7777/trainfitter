@@ -103,6 +103,23 @@ local function ShallowCopy(t)
     return r
 end
 
+local function SafeStringLib()
+    local s = ShallowCopy(string)
+    s.dump = nil
+    return s
+end
+
+local function StripMetas(t, seen)
+    if not istable(t) then return end
+    seen = seen or {}
+    if seen[t] then return end
+    seen[t] = true
+    pcall(setmetatable, t, nil)
+    for _, v in pairs(t) do
+        if istable(v) then StripMetas(v, seen) end
+    end
+end
+
 local SAFE_ENT_METHODS = {
     "IsValid", "EntIndex", "GetClass", "GetModel",
     "GetPos", "GetAngles", "GetForward", "GetRight", "GetUp",
@@ -172,7 +189,10 @@ local function MakeMetrostroiView()
     if not istable(Metrostroi) then return {} end
     local function wrap(fn)
         if not isfunction(fn) then return nil end
-        return function(c, t) return fn(c, ProxyTableFunctions(t)) end
+        return function(c, t)
+            StripMetas(t)
+            return fn(c, ProxyTableFunctions(t))
+        end
     end
     return {
         AddSkin           = wrap(Metrostroi.AddSkin),
@@ -223,6 +243,15 @@ local function MakePathPrefix(path)
     return "trainfitter_sb:" .. s
 end
 
+local function SafeMaterial(path, params)
+    if not isstring(path) then return nil end
+    if string.find(path, "..", 1, true)  then return nil end
+    if string.find(path, ":",  1, true)  then return nil end
+    if string.sub(path, 1, 1) == "/"     then return nil end
+    if string.sub(path, 1, 1) == "\\"    then return nil end
+    return Material(path, params)
+end
+
 local function BuildSkinSandbox()
     local sb = {
         Metrostroi = MakeMetrostroiView(),
@@ -232,7 +261,7 @@ local function BuildSkinSandbox()
         Angle  = Angle,
 
         table  = ShallowCopy(table),
-        string = ShallowCopy(string),
+        string = SafeStringLib(),
         math   = ShallowCopy(math),
         bit    = ShallowCopy(bit),
 
@@ -267,7 +296,7 @@ local function BuildSkinSandbox()
         SERVER = SERVER,
         CLIENT = CLIENT,
 
-        Material = Material,
+        Material = SafeMaterial,
         AddCSLuaFile = function() end,
         print = function() end,
     }
@@ -319,22 +348,39 @@ local function BuildMaskSandbox(prefix)
     return sb
 end
 
+local SANDBOX_INSTR_LIMIT = 100 * 1000 * 1000
+
 function Trainfitter.ExecSandboxed(content, path, kind)
     if not isstring(content) or #content == 0 then
         return false, "empty content"
+    end
+    if string.byte(content, 1) == 0x1B then
+        return false, "lua bytecode rejected"
     end
     local fn, compileErr = CompileString(content, path, false)
     if isstring(fn) then return false, "compile: " .. fn end
     if not isfunction(fn) then return false, "compile returned non-function" end
 
+    if not isfunction(setfenv) then
+        return false, "setfenv unavailable — refusing to execute without sandbox"
+    end
+
     local prefix = MakePathPrefix(path)
     local sb = (kind == "mask") and BuildMaskSandbox(prefix) or BuildSkinSandbox()
-    if isfunction(setfenv) then
-        local ok = pcall(setfenv, fn, sb)
-        if not ok then return false, "setfenv failed" end
+    local setOk, setErr = pcall(setfenv, fn, sb)
+    if not setOk then return false, "setfenv failed: " .. tostring(setErr) end
+
+    local hookSet = false
+    if debug and isfunction(debug.sethook) then
+        debug.sethook(function() error("instruction limit exceeded", 2) end,
+                      "", SANDBOX_INSTR_LIMIT)
+        hookSet = true
     end
 
     local ok, runErr = pcall(fn)
+
+    if hookSet then debug.sethook() end
+
     if not ok then return false, "runtime: " .. tostring(runErr) end
     return true
 end

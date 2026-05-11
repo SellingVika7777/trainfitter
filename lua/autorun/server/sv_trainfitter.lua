@@ -49,10 +49,11 @@ local NICKS_FILE      = PERSIST_DIR .. "/nicks.json"
 local AUDIT_FILE      = PERSIST_DIR .. "/audit.log"
 local AUDIT_FILE_OLD  = PERSIST_DIR .. "/audit.log.old"
 
-local lastRequest   = {}
-local lastListReq   = {}
-local lastStatusReq = {}
-local lastAdminGet  = {}
+local lastRequest      = {}
+local lastListReq      = {}
+local lastStatusReq    = {}
+local lastAdminGet     = {}
+local lastReportSkins  = {}
 
 local function IsValidWSID(s)
     if not isstring(s) then return false end
@@ -1191,6 +1192,13 @@ local function PruneSessionState()
     for sid in pairs(lastListReq)   do if not onlineSids[sid] then lastListReq[sid]   = nil; removed = removed + 1 end end
     for sid in pairs(lastAdminGet)  do if not onlineSids[sid] then lastAdminGet[sid]  = nil; removed = removed + 1 end end
     for sid in pairs(lastStatusReq) do if not onlineSids[sid] then lastStatusReq[sid] = nil; removed = removed + 1 end end
+    for key in pairs(lastReportSkins) do
+        local sid = string.match(key, "^([^|]+)|")
+        if sid and not onlineSids[sid] then
+            lastReportSkins[key] = nil
+            removed = removed + 1
+        end
+    end
 
     local NICK_CACHE_CAP = 4096
     local nickCount = 0
@@ -1223,6 +1231,12 @@ net.Receive(NET.ReportSkins, function(len, ply)
 
     local wsid = net.ReadString()
     if not IsValidWSID(wsid) then return end
+
+    local sid = ply:SteamID64() or "0"
+    local rsKey = sid .. "|" .. wsid
+    local now = CurTime()
+    if lastReportSkins[rsKey] and (now - lastReportSkins[rsKey]) < 5 then return end
+    lastReportSkins[rsKey] = now
 
     local knownWsid =
            Trainfitter.SessionBroadcast[wsid] ~= nil
