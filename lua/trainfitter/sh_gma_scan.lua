@@ -103,19 +103,85 @@ local function ShallowCopy(t)
     return r
 end
 
+local SAFE_ENT_METHODS = {
+    "IsValid", "EntIndex", "GetClass", "GetModel",
+    "GetPos", "GetAngles", "GetForward", "GetRight", "GetUp",
+    "GetNWVar", "GetNW2Var",
+    "GetNWString", "GetNWInt", "GetNWFloat", "GetNWBool",
+    "GetNW2String", "GetNW2Int", "GetNW2Float", "GetNW2Bool",
+    "Nick", "GetName", "Name",
+    "SteamID", "SteamID64", "UserID", "AccountID",
+    "Team", "GetTeam",
+    "IsBot", "IsPlayer", "IsAdmin", "IsSuperAdmin",
+    "EyePos", "EyeAngles",
+}
+
+local function MakeEntProxy(ent)
+    if not isentity(ent) then return ent end
+    if not IsValid(ent) then
+        return {
+            IsValid  = function() return false end,
+            EntIndex = function() return 0 end,
+        }
+    end
+    local p = {}
+    for _, name in ipairs(SAFE_ENT_METHODS) do
+        local fn = ent[name]
+        if isfunction(fn) then
+            p[name] = function(_, ...) return fn(ent, ...) end
+        end
+    end
+    return p
+end
+
+local function ProxyList(list)
+    if not istable(list) then return {} end
+    local out = {}
+    for _, e in ipairs(list) do
+        local p = MakeEntProxy(e)
+        if p then out[#out + 1] = p end
+    end
+    return out
+end
+
+local function ProxyArgs(...)
+    local n = select("#", ...)
+    if n == 0 then return end
+    local args = {...}
+    for i = 1, n do
+        if isentity(args[i]) then args[i] = MakeEntProxy(args[i]) end
+    end
+    return unpack(args, 1, n)
+end
+
+local function ProxyCallback(fn)
+    if not isfunction(fn) then return fn end
+    return function(...) return fn(ProxyArgs(...)) end
+end
+
+local function ProxyTableFunctions(t)
+    if not istable(t) then return t end
+    local r = {}
+    for k, v in pairs(t) do
+        if isfunction(v) then r[k] = ProxyCallback(v) else r[k] = v end
+    end
+    return r
+end
+
 local function MakeMetrostroiView()
     if not istable(Metrostroi) then return {} end
+    local function wrap(fn)
+        if not isfunction(fn) then return nil end
+        return function(c, t) return fn(c, ProxyTableFunctions(t)) end
+    end
     return {
-        AddSkin           = Metrostroi.AddSkin,
-        AddMask           = Metrostroi.AddMask,
-        RegisterSkin      = Metrostroi.RegisterSkin,
-        DefineSkin        = Metrostroi.DefineSkin,
-        RegisterMask      = Metrostroi.RegisterMask,
-        DefineMask        = Metrostroi.DefineMask,
+        AddSkin           = wrap(Metrostroi.AddSkin),
+        AddMask           = wrap(Metrostroi.AddMask),
+        RegisterSkin      = wrap(Metrostroi.RegisterSkin),
+        DefineSkin        = wrap(Metrostroi.DefineSkin),
+        RegisterMask      = wrap(Metrostroi.RegisterMask),
+        DefineMask        = wrap(Metrostroi.DefineMask),
         AddLastStationTex = Metrostroi.AddLastStationTex,
-        Skins             = Metrostroi.Skins,
-        Masks             = Metrostroi.Masks,
-        TrainClasses      = Metrostroi.TrainClasses,
     }
 end
 
@@ -124,22 +190,11 @@ local function MakeNamespacedHook(prefix)
     return {
         Add = function(name, id, fn)
             if not isstring(name) or not isfunction(fn) then return end
-            return hook.Add(name, ns(id), fn)
+            return hook.Add(name, ns(id), ProxyCallback(fn))
         end,
         Remove = function(name, id)
             if not isstring(name) then return end
             return hook.Remove(name, ns(id))
-        end,
-        Run      = hook.Run,
-        Call     = hook.Call,
-        GetTable = function()
-            local copy = {}
-            for ev, sub in pairs(hook.GetTable()) do
-                local s = {}
-                for id, fn in pairs(sub) do s[id] = fn end
-                copy[ev] = s
-            end
-            return copy
         end,
     }
 end
@@ -159,14 +214,6 @@ local function MakeNamespacedTimer(prefix)
         UnPause  = function(name) if not isstring(name) then return end return timer.UnPause(ns(name)) end,
         TimeLeft = function(name) if not isstring(name) then return 0  end return timer.TimeLeft(ns(name)) end,
         RepsLeft = function(name) if not isstring(name) then return 0  end return timer.RepsLeft(ns(name)) end,
-    }
-end
-
-local function MakeScriptedEntsView()
-    return {
-        GetStored = scripted_ents.GetStored,
-        Get       = scripted_ents.Get,
-        GetList   = scripted_ents.GetList,
     }
 end
 
@@ -231,39 +278,42 @@ end
 local function BuildMaskSandbox(prefix)
     local sb = BuildSkinSandbox()
 
-    sb.hook              = MakeNamespacedHook(prefix)
-    sb.timer             = MakeNamespacedTimer(prefix)
-    sb.scripted_ents     = MakeScriptedEntsView()
-    sb.Entity            = Entity
-    sb.SafeRemoveEntity  = SafeRemoveEntity
-    sb.FindMetaTable     = FindMetaTable
+    sb.hook  = MakeNamespacedHook(prefix)
+    sb.timer = MakeNamespacedTimer(prefix)
+
+    sb.FindMetaTable = function(name)
+        if name ~= "Entity" then return nil end
+        local mt = FindMetaTable("Entity")
+        if not mt or not isfunction(mt.GetClass) then return nil end
+        return { GetClass = mt.GetClass }
+    end
+
+    sb.Entity = function(idx) return MakeEntProxy(Entity(idx)) end
 
     sb.ents = {
-        FindByClass  = ents.FindByClass,
-        FindInSphere = ents.FindInSphere,
-        FindInBox    = ents.FindInBox,
-        GetAll       = ents.GetAll,
-        GetByIndex   = ents.GetByIndex,
+        FindByClass  = function(c)    return ProxyList(ents.FindByClass(c)) end,
+        FindInSphere = function(p, r) return ProxyList(ents.FindInSphere(p, r)) end,
+        FindInBox    = function(a, b) return ProxyList(ents.FindInBox(a, b)) end,
+        GetAll       = function()     return ProxyList(ents.GetAll()) end,
+        GetByIndex   = function(i)    return MakeEntProxy(ents.GetByIndex(i)) end,
         GetCount     = ents.GetCount,
     }
 
     sb.player = {
-        GetAll         = player.GetAll,
-        GetHumans      = player.GetHumans,
-        GetBots        = player.GetBots,
-        GetByID        = player.GetByID,
-        GetBySteamID   = player.GetBySteamID,
-        GetBySteamID64 = player.GetBySteamID64,
+        GetAll         = function()  return ProxyList(player.GetAll()) end,
+        GetHumans      = function()  return ProxyList(player.GetHumans()) end,
+        GetBots        = function()  return ProxyList(player.GetBots()) end,
+        GetByID        = function(i) return MakeEntProxy(player.GetByID(i)) end,
+        GetBySteamID   = function(s) return MakeEntProxy(player.GetBySteamID(s)) end,
+        GetBySteamID64 = function(s) return MakeEntProxy(player.GetBySteamID64(s)) end,
         GetCount       = player.GetCount,
     }
 
-    sb.print       = print
-    sb.MsgC        = MsgC
-    sb.Msg         = Msg
-    sb.MsgN        = MsgN
-    sb.PrintTable  = PrintTable
-
-    sb.getmetatable = getmetatable
+    sb.print      = print
+    sb.MsgC       = MsgC
+    sb.Msg        = Msg
+    sb.MsgN       = MsgN
+    sb.PrintTable = PrintTable
 
     sb._G = sb
     return sb
