@@ -297,8 +297,10 @@ local function ProcessQueue()
             return
         end
 
+        local scanBodies = nil
         if Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-            local callOK, safe, reason = pcall(Trainfitter.ScanGMA, path)
+            local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path)
+            scanBodies = bodies
             if not callOK then
                 MsgC(Color(255, 180, 80),
                     "[Trainfitter] scanner crashed on " .. wsid ..
@@ -343,7 +345,10 @@ local function ProcessQueue()
         for _, fpath in ipairs(files or {}) do
             local kind = isstring(fpath) and ClassifyFile(fpath) or nil
             if kind then
-                local content = file.Read(fpath, "GAME")
+                local content = scanBodies and scanBodies[string.lower(fpath)] or nil
+                if not isstring(content) or #content == 0 then
+                    content = file.Read(fpath, "GAME")
+                end
                 if isstring(content) and #content > 0 then
                     local sandboxKind = (kind == "autorun") and "mask" or "skin"
                     local validator = (kind == "autorun")

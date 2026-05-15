@@ -503,6 +503,7 @@ function Trainfitter.ScanGMA(gmapath)
 
     local files            = {}
     local entries          = {}
+    local luaBodies        = {}
     local skinFileCount    = 0
     local maskFileCount    = 0
     local materialsCount   = 0
@@ -651,6 +652,7 @@ function Trainfitter.ScanGMA(gmapath)
                 f:Close()
                 return false, reason, files
             end
+            luaBodies[string.lower(e.name)] = body
         else
             if e.size > 0 then
                 local okT, pos  = pcall(f.Tell, f)
@@ -673,7 +675,7 @@ function Trainfitter.ScanGMA(gmapath)
     end
 
     f:Close()
-    return true, nil, files
+    return true, nil, files, luaBodies
 end
 
 if CLIENT then

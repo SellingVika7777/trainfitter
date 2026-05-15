@@ -422,13 +422,17 @@ local function SnapshotMetrostroiTable(t)
     return snap
 end
 
-local function ServerExecuteSkinFiles(files, wsid)
+local function ServerExecuteSkinFiles(files, wsid, luaBodies)
     if not istable(files) then return 0 end
+    if not istable(luaBodies) then luaBodies = nil end
     local beforeSkins = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Skins) or {}
     local beforeMasks = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Masks) or {}
 
     local function execFile(fp, kind)
-        local c = file.Read(fp, "GAME")
+        local c = luaBodies and luaBodies[string.lower(fp)] or nil
+        if not isstring(c) or #c == 0 then
+            c = file.Read(fp, "GAME")
+        end
         if not isstring(c) or #c == 0 then return false end
 
         local pre, preErr = (kind == "mask")
@@ -548,8 +552,10 @@ local function onGMAReady(wsid, path)
         return
     end
 
+    local scanBodies = nil
     if Trainfitter.ScanGMA and Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-        local callOK, safe, reason = pcall(Trainfitter.ScanGMA, path)
+        local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path)
+        scanBodies = bodies
         if not callOK then
             MsgC(Color(255, 120, 120), string.format(
                 "[Trainfitter] Scanner crashed on %s: %s — REFUSING mount.\n",
@@ -582,7 +588,7 @@ local function onGMAReady(wsid, path)
     local ok, files = game.MountGMA(path)
     if ok and istable(files) then
         Trainfitter.MountedServer[wsid] = true
-        local executed = ServerExecuteSkinFiles(files, wsid)
+        local executed = ServerExecuteSkinFiles(files, wsid, scanBodies)
         MsgC(Color(120, 220, 150), string.format(
             "[Trainfitter] Server mounted %s: %d skin scripts executed\n",
             wsid, executed))
