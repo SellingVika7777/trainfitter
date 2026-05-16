@@ -177,19 +177,27 @@ end
 
 local function MakeMetrostroiView()
     if not istable(Metrostroi) then return {} end
-    local function wrap(fn)
+    -- Masks have Render(train)/Think(train) callbacks invoked by Metrostroi with
+    -- real entities, so their callback args must be proxied. Skins are pure data
+    -- (textures/bodygroups) — pass them through untouched to avoid breaking
+    -- registration / menu listing.
+    local function wrapMask(fn)
         if not isfunction(fn) then return nil end
         return function(c, t)
             return fn(c, ProxyTableFunctions(t))
         end
     end
+    local function passthrough(fn)
+        if not isfunction(fn) then return nil end
+        return function(...) return fn(...) end
+    end
     return {
-        AddSkin           = wrap(Metrostroi.AddSkin),
-        AddMask           = wrap(Metrostroi.AddMask),
-        RegisterSkin      = wrap(Metrostroi.RegisterSkin),
-        DefineSkin        = wrap(Metrostroi.DefineSkin),
-        RegisterMask      = wrap(Metrostroi.RegisterMask),
-        DefineMask        = wrap(Metrostroi.DefineMask),
+        AddSkin           = passthrough(Metrostroi.AddSkin),
+        AddMask           = wrapMask(Metrostroi.AddMask),
+        RegisterSkin      = passthrough(Metrostroi.RegisterSkin),
+        DefineSkin        = passthrough(Metrostroi.DefineSkin),
+        RegisterMask      = wrapMask(Metrostroi.RegisterMask),
+        DefineMask        = wrapMask(Metrostroi.DefineMask),
         AddLastStationTex = Metrostroi.AddLastStationTex,
     }
 end
