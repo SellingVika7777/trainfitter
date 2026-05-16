@@ -109,16 +109,6 @@ local function SafeStringLib()
     return s
 end
 
-local function StripMetas(t, seen)
-    if not istable(t) then return end
-    seen = seen or {}
-    if seen[t] then return end
-    seen[t] = true
-    pcall(setmetatable, t, nil)
-    for _, v in pairs(t) do
-        if istable(v) then StripMetas(v, seen) end
-    end
-end
 
 local SAFE_ENT_METHODS = {
     "IsValid", "EntIndex", "GetClass", "GetModel",
@@ -190,7 +180,6 @@ local function MakeMetrostroiView()
     local function wrap(fn)
         if not isfunction(fn) then return nil end
         return function(c, t)
-            StripMetas(t)
             return fn(c, ProxyTableFunctions(t))
         end
     end
