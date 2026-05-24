@@ -1,0 +1,92 @@
+Trainfitter — License / Авторство
+
+Copyright (c) 2026 SellingVika (sellingvika@gmail.com)
+All rights reserved.
+
+
+ENGLISH
+-------
+
+You are granted permission to use, copy, modify, and distribute this software
+and its accompanying assets, subject to the following conditions:
+
+1. ATTRIBUTION IS MANDATORY
+   Every source file in this distribution contains a header comment of the
+   form:
+
+       -- Trainfitter — <filename>.lua
+       -- Made by SellingVika.
+
+   You MUST preserve this header in any copy, modification, or derivative of
+   the software. Removing, altering, or obscuring this header is PROHIBITED.
+
+2. NO REBRANDING AS YOUR OWN
+   You may not claim authorship of the original Trainfitter code, UI, or
+   security scanner. Redistributing under a different author name without
+   credit to SellingVika is prohibited.
+
+3. FORKS MUST BE CLEARLY DISTINCT
+   If you fork or create a derivative work:
+     - Keep the "Made by SellingVika." header intact.
+     - Add your own authorship line AFTER the original.
+     - Use a distinct name for your fork (not "Trainfitter").
+     - Link back to the original repository in your README.
+
+4. NO UNAUTHORIZED COMMERCIAL USE
+   You may not sell the original Trainfitter, nor modified versions of it,
+   without explicit written permission from SellingVika. Use on free public
+   Garry's Mod servers is explicitly allowed.
+
+5. NO WARRANTY
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+   FROM THE USE OF THIS SOFTWARE.
+
+
+РУССКИЙ
+-------
+
+Вам предоставляется разрешение использовать, копировать, модифицировать и
+распространять данное программное обеспечение и связанные с ним ресурсы,
+при соблюдении следующих условий:
+
+1. АТРИБУЦИЯ ОБЯЗАТЕЛЬНА
+   Каждый файл исходного кода в данной поставке содержит заголовочный
+   комментарий вида:
+
+       -- Trainfitter — <имя_файла>.lua
+       -- Made by SellingVika.
+
+   Вы ОБЯЗАНЫ сохранять этот заголовок в любой копии, модификации или
+   производной работе. Удаление, изменение или сокрытие этого заголовка
+   ЗАПРЕЩЕНО.
+
+2. НЕЛЬЗЯ ВЫДАВАТЬ ЗА СВОЁ
+   Запрещено претендовать на авторство оригинального кода Trainfitter, его
+   интерфейса или сканера безопасности. Перепубликация под другим именем
+   автора без упоминания SellingVika — запрещена.
+
+3. ФОРКИ ДОЛЖНЫ ЧЁТКО ОТЛИЧАТЬСЯ
+   Если вы форкаете или создаёте производную работу:
+     - Сохраните заголовок "Made by SellingVika."
+     - Добавьте свою строку авторства ПОСЛЕ оригинального заголовка.
+     - Используйте отличающееся имя для вашего форка (не "Trainfitter").
+     - Ссылайтесь на оригинальный репозиторий в README вашего форка.
+
+4. НЕТ КОММЕРЧЕСКОГО ИСПОЛЬЗОВАНИЯ БЕЗ РАЗРЕШЕНИЯ
+   Запрещено продавать оригинальный Trainfitter или его модификации без
+   явного письменного разрешения SellingVika. Использование на бесплатных
+   публичных серверах Garry's Mod разрешено.
+
+5. БЕЗ ГАРАНТИЙ
+   ДАННОЕ ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ ПРЕДОСТАВЛЯЕТСЯ «КАК ЕСТЬ», БЕЗ КАКИХ-ЛИБО
+   ГАРАНТИЙ. АВТОР НЕ НЕСЁТ ОТВЕТСТВЕННОСТИ ЗА ЛЮБЫЕ ПРЕТЕНЗИИ, УБЫТКИ ИЛИ
+   ИНУЮ ОТВЕТСТВЕННОСТЬ, ВОЗНИКАЮЩИЕ В СВЯЗИ С ИСПОЛЬЗОВАНИЕМ ДАННОГО ПО.
+
+
+КОНТАКТ
+-------
+Связь с автором по вопросам использования, коммерческих лицензий,
+нарушений атрибуции или иных правовых вопросов: sellingvika@gmail.com.
