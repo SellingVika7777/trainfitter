@@ -1,0 +1,649 @@
+Trainfitter - License / Лицензия / Licens
+==========================================
+
+Copyright (c) 2026 SellingVika (sellingvika@gmail.com)
+Website: https://sellingvika.party/
+All rights reserved.
+
+This is a CUSTOM PROPRIETARY LICENSE - not MIT, not GPL, not any standard
+open-source license. Read it BEFORE you use the software.
+
+Это СОБСТВЕННИЧЕСКАЯ ЛИЦЕНЗИЯ - не MIT, не GPL, не одна из стандартных
+open-source лицензий. Прочитай ДО того как использовать.
+
+
+================================================================================
+                                  ENGLISH
+================================================================================
+
+
+0. DEFINITIONS
+
+   "The Software" or "Trainfitter" - this addon, including all `.lua` source
+   files, asset files (textures, models, sounds, materials), documentation
+   (README, this LICENSE), and any other files distributed in this
+   repository.
+
+   "Author" - SellingVika, contact sellingvika@gmail.com.
+
+   "Header" - the comment line `-- Made by SellingVika` present in every
+   `.lua` source file of this distribution.
+
+   "Fork" - any modified copy of the Software, whether published, shared
+   privately, or kept locally.
+
+   "Server" - a Garry's Mod dedicated or listen server running Metrostroi
+   Subway Simulator gameplay.
+
+   "Commercial use" - any use where money, paid subscriptions, paid premium
+   tiers, donations gated by access, or any form of monetary compensation
+   for the Software (or features enabled by it) is involved. Free public
+   gameplay on a community server, even one that accepts unrelated
+   voluntary donations, is NOT commercial use under this License.
+
+   "Weakened version" - a Fork or modified copy where any of the security
+   mechanisms listed in section 3.5 have been disabled, removed, bypassed,
+   weakened beyond their official tunable convars, or otherwise rendered
+   less effective than in the original.
+
+
+1. PERMITTED USES (no further permission needed)
+
+   1.1. Install and run Trainfitter on your own Garry's Mod server, free of
+        charge, for any non-commercial gameplay purpose.
+
+   1.2. Read, study, audit, and inspect the source code.
+
+   1.3. Submit pull requests, open issues, or send bug reports to the
+        original repository.
+
+   1.4. Mention Trainfitter in reviews, video tutorials, blog posts, server
+        announcements, public addon lists, or community recommendations,
+        provided you credit the Author and link to the original repository.
+
+   1.5. Modify your local copy for personal use on your own server
+        (without redistributing the modifications publicly).
+
+   1.6. Tune the Software's behavior using the official convars
+        (`trainfitter_*`) - this is exactly what they exist for and does
+        NOT count as a "weakened version".
+
+
+2. PERMITTED WITH CONDITIONS
+
+   2.1. PUBLIC FORKS are allowed only if ALL of the following conditions
+        are met simultaneously:
+
+        a. Every original `.lua` file retains the Header
+           `-- Made by SellingVika` unchanged. Removing, altering, hiding,
+           encoding, or obfuscating the Header is prohibited (section 3.1).
+
+        b. Each Fork or modified `.lua` file gets your authorship line
+           IMMEDIATELY AFTER the original Header:
+
+               -- Trainfitter - <filename>.lua
+               -- Made by SellingVika
+               -- Forked and modified by <your name>
+
+        c. The Fork uses a DISTINCT, derived name. NOT "Trainfitter".
+           NOT trivial variations such as "Trainfitter2", "Trainfitter+",
+           "TrainfitterRedux", "Trainfitter Pro", etc. Examples of
+           acceptable derived names: "Wagonfitter", "MyServerSkinLoader",
+           "MetroSkinManager-Custom".
+
+        d. The Fork's README clearly states it is derived from Trainfitter
+           by SellingVika, with a working hyperlink to the original
+           repository.
+
+        e. The Fork's README contains a CHANGELOG or similar section
+           listing what has been modified relative to the original.
+
+        f. The Fork does NOT disable, weaken, bypass, or remove any
+           security mechanism of the original (section 3.5). Tuning via
+           official convars is fine.
+
+        g. The Fork is NOT distributed via Steam Workshop under the
+           original name "Trainfitter".
+
+   2.2. USING PARTS OF THE CODE in unrelated projects is allowed if:
+
+        a. Each reused file or function retains an attribution comment
+           naming SellingVika as the original author and Trainfitter as
+           the source.
+
+        b. Your project's README, CREDITS, or About screen lists
+           Trainfitter and SellingVika with a working link to the original
+           repository.
+
+        c. You are NOT using the reused code in a commercial product
+           without separate written permission (section 3.4).
+
+
+3. STRICTLY PROHIBITED
+
+   3.1. REMOVING OR ALTERING THE HEADER.
+        Deleting, modifying, masking, encoding, obfuscating, splitting,
+        relocating, commenting out, or otherwise rendering the
+        `-- Made by SellingVika` line unreadable or absent in ANY `.lua`
+        file is prohibited under all circumstances. This applies to the
+        original, all Forks, all redistributions, and all derivative
+        works in any form.
+
+   3.2. CLAIMING AUTHORSHIP.
+        Distributing Trainfitter (modified or not) while presenting
+        yourself, your team, or any third party as the original author of
+        the Software, its UI, its security scanner, its sandbox, or any
+        of its substantial components - is plagiarism and prohibited.
+
+   3.3. REUSING THE NAME "TRAINFITTER".
+        Public Forks, derivatives, repackaged versions, server collections,
+        Workshop uploads, or any other distribution must NOT use the name
+        "Trainfitter" as their own identifier. The name "Trainfitter"
+        refers exclusively to this Software by SellingVika.
+
+   3.4. COMMERCIAL USE WITHOUT WRITTEN PERMISSION.
+        Selling Trainfitter or any modifications, including but not
+        limited to:
+          - Reselling as a standalone product;
+          - Bundling in paid server packs or "premium" server packages;
+          - Gating Trainfitter-provided features behind paid subscriptions
+            or VIP tiers;
+          - Including in commercial server hosting offerings;
+          - Selling support or installation services as the sole product;
+          - Using as part of a paid course, paid tutorial bundle, or
+            paid asset pack;
+        without prior written permission from the Author, is prohibited.
+
+        Free public Garry's Mod servers are explicitly allowed, even if
+        they accept unrelated voluntary donations not tied to access.
+
+   3.5. DISTRIBUTING WEAKENED VERSIONS.
+        Distributing modified versions ("Forks", repackages, mirrors,
+        etc) where any of the following has been disabled, removed,
+        weakened beyond official tunable convars, or bypassed - is
+        prohibited:
+          - The GMA scanner (`Trainfitter.ScanGMA`);
+          - The Lua content scanner (`Trainfitter.ValidateSkinLua`,
+            `Trainfitter.ValidateMaskLua`);
+          - The sandbox (`Trainfitter.ExecSandboxed`);
+          - The two-tier path whitelist;
+          - The extension whitelist;
+          - The bytecode rejection;
+          - The instruction limit;
+          - The marker requirement;
+          - The Material guard;
+          - The hook/timer namespacing;
+          - The entity proxying;
+          - Any rate-limit on net handlers;
+          - Any size cap on files, lua content, or addon totals.
+
+        Such a Fork is DANGEROUS to its users and damages the reputation
+        of the original. Tuning behavior via the official convars
+        (`trainfitter_max_lua_kb`, `trainfitter_sandbox_instr_m`,
+        `trainfitter_reject_bytecode`, `trainfitter_allow_full_lua`, etc)
+        is fine and is what they exist for.
+
+   3.6. REUPLOADING TO STEAM WORKSHOP UNDER YOUR OWN NAME.
+        Publishing Trainfitter (or any modification) on Steam Workshop
+        as your own creation is prohibited. Sharing via direct GitHub
+        link or your own download service is fine if all other
+        conditions of this License are met.
+
+   3.7. USE TO VIOLATE OTHER TERMS.
+        Using Trainfitter to violate the Steam Subscriber Agreement,
+        Garry's Mod terms of service, Facepunch addon policies, or to
+        facilitate any illegal activity on any server, is prohibited.
+
+   3.8. DECEPTIVE LABELING.
+        Distributing the Software (or any Fork) with misleading labels
+        such as "official", "stable Trainfitter release", "Trainfitter
+        successor", "Trainfitter team", or anything implying endorsement
+        by or affiliation with SellingVika - is prohibited unless such
+        endorsement actually exists and can be proven.
+
+
+4. ATTRIBUTION REQUIREMENTS
+
+   When publishing a Fork, redistribution, or partial reuse, include
+   the following credits in a visible location (typically README, About
+   screen, or `credits.txt`):
+
+       Trainfitter by SellingVika
+       https://sellingvika.party/
+       Original repository: <link to original repository>
+
+   The Header in every `.lua` file already serves this purpose for
+   in-code attribution and is mandatory in addition to the above.
+
+
+5. WARRANTY DISCLAIMER
+
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NONINFRINGEMENT,
+   AND DATA SAFETY.
+
+   IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, LOSS
+   OF DATA, SERVER DOWNTIME, BANS BY STEAM OR GARRY'S MOD, REPUTATION
+   DAMAGE, LOSS OF SUBSCRIBERS, OR ANY OTHER LIABILITY ARISING FROM
+   THE USE, MISUSE, OR INABILITY TO USE THIS SOFTWARE, WHETHER IN AN
+   ACTION OF CONTRACT, TORT, OR OTHERWISE.
+
+   Users install and operate Trainfitter at their own risk.
+
+
+6. TERMINATION
+
+   Violation of any condition in this License results in IMMEDIATE and
+   AUTOMATIC termination of all rights granted herein, with no notice
+   required. Upon discovery of a violation, the Author may, at the
+   Author's sole discretion:
+
+   a. Demand immediate removal of unauthorized copies from any
+      platform, including but not limited to GitHub, Steam Workshop,
+      file hosts, websites, server installations.
+
+   b. File DMCA takedown notices with the relevant hosting platforms.
+
+   c. Pursue legal action under applicable copyright law and the law
+      of the violator's jurisdiction.
+
+   d. Publicly identify the violator and the nature of the violation
+      in addon community channels.
+
+   Returning to compliance after a violation does NOT automatically
+   restore terminated rights. A fresh written permission from the
+   Author must be obtained.
+
+
+7. CONTACT FOR PERMISSIONS
+
+   For commercial licensing, integration into proprietary products,
+   resale inquiries, or any use NOT covered by sections 1 and 2:
+
+       Email:   sellingvika@gmail.com
+       Website: https://sellingvika.party/
+
+   Send your request BEFORE using. Absence of written permission means
+   permission has NOT been granted.
+
+   The Author reserves the right to grant, deny, or attach conditions
+   to any permission request, at sole discretion.
+
+
+8. SEVERABILITY
+
+   If any provision of this License is held to be unenforceable in a
+   particular jurisdiction, the remaining provisions remain in full
+   effect, and the unenforceable provision should be interpreted in
+   the manner closest to its original intent that the jurisdiction
+   allows.
+
+
+9. GOVERNING SPIRIT
+
+   When in doubt about whether something is allowed: it probably isn't.
+   Email sellingvika@gmail.com and ask. Permission is often granted for
+   honest requests; refusal is reserved for cases that contradict the
+   spirit of this License.
+
+
+================================================================================
+                                  РУССКИЙ
+================================================================================
+
+
+0. ОПРЕДЕЛЕНИЯ
+
+   "Программное обеспечение" или "Trainfitter" - данный аддон, включая
+   все `.lua` файлы исходного кода, файлы ресурсов (текстуры, модели,
+   звуки, материалы), документацию (README, данный LICENSE) и любые
+   другие файлы из данной поставки.
+
+   "Автор" - SellingVika, контакт sellingvika@gmail.com.
+
+   "Заголовок" - строка комментария `-- Made by SellingVika`,
+   присутствующая в каждом `.lua` файле данной поставки.
+
+   "Форк" - любая модифицированная копия Программного обеспечения,
+   опубликованная, переданная приватно или хранящаяся локально.
+
+   "Сервер" - dedicated или listen сервер Garry's Mod на котором играют
+   в Metrostroi Subway Simulator.
+
+   "Коммерческое использование" - любое использование где задействованы
+   деньги, платные подписки, платные premium-тарифы, донаты привязанные
+   к доступу, или иная форма денежной компенсации за Программное
+   обеспечение (или функции которые оно обеспечивает). Бесплатная
+   публичная игра на community-сервере, даже принимающем не связанные
+   с доступом добровольные донаты, НЕ считается коммерческим
+   использованием по данной Лицензии.
+
+   "Ослабленная версия" - Форк или модифицированная копия в которой
+   какие-либо механизмы безопасности из раздела 3.5 отключены, удалены,
+   обойдены, ослаблены сверх того что позволяют официальные конвары,
+   или иным образом сделаны менее эффективными чем в оригинале.
+
+
+1. РАЗРЕШЕНО (без дополнительного разрешения)
+
+   1.1. Установка и запуск Trainfitter на собственном сервере Garry's Mod
+        бесплатно для любых не-коммерческих игровых целей.
+
+   1.2. Чтение, изучение, аудит и инспекция исходного кода.
+
+   1.3. Отправка pull request-ов, открытие issue, отправка багрепортов
+        в оригинальный репозиторий.
+
+   1.4. Упоминание Trainfitter в обзорах, видео-туториалах, статьях,
+        анонсах серверов, публичных списках аддонов или community-
+        рекомендациях, при условии указания Автора и ссылки на
+        оригинальный репозиторий.
+
+   1.5. Модификация собственной локальной копии для личного использования
+        на собственном сервере (без публичного распространения
+        модификаций).
+
+   1.6. Настройка поведения через официальные конвары (`trainfitter_*`)
+        - это именно то для чего они существуют и НЕ считается
+        "Ослабленной версией".
+
+
+2. РАЗРЕШЕНО ПРИ УСЛОВИЯХ
+
+   2.1. ПУБЛИЧНЫЕ ФОРКИ разрешены только при ОДНОВРЕМЕННОМ соблюдении
+        ВСЕХ условий:
+
+        а. Каждый оригинальный `.lua` файл сохраняет Заголовок
+           `-- Made by SellingVika` без изменений. Удаление, изменение,
+           сокрытие, кодирование или обфускация Заголовка - запрещены
+           (раздел 3.1).
+
+        б. Каждый форкнутый или модифицированный `.lua` файл получает
+           вашу строку авторства НЕПОСРЕДСТВЕННО ПОСЛЕ оригинального
+           Заголовка:
+
+               -- Trainfitter - <имя_файла>.lua
+               -- Made by SellingVika
+               -- Forked and modified by <ваше имя>
+
+        в. Форк использует ОТЛИЧНОЕ производное имя. НЕ "Trainfitter".
+           НЕ тривиальные варианты типа "Trainfitter2", "Trainfitter+",
+           "TrainfitterRedux", "Trainfitter Pro" и т.п. Примеры
+           допустимых имён: "Wagonfitter", "MyServerSkinLoader",
+           "MetroSkinManager-Custom".
+
+        г. README форка ясно указывает что он создан на основе
+           Trainfitter от SellingVika, с рабочей гипер-ссылкой на
+           оригинальный репозиторий.
+
+        д. README форка содержит секцию CHANGELOG или аналогичную,
+           перечисляющую что изменено относительно оригинала.
+
+        е. Форк НЕ отключает, не ослабляет, не обходит и не удаляет
+           никакие механизмы безопасности оригинала (раздел 3.5).
+           Настройка через официальные конвары - нормально.
+
+        ж. Форк НЕ распространяется через Steam Workshop под
+           оригинальным именем "Trainfitter".
+
+   2.2. ИСПОЛЬЗОВАНИЕ ЧАСТЕЙ КОДА в несвязанных проектах разрешено если:
+
+        а. Каждый переиспользованный файл или функция сохраняет
+           комментарий с упоминанием SellingVika как оригинального
+           автора и Trainfitter как источника.
+
+        б. README, CREDITS или About-экран вашего проекта перечисляет
+           Trainfitter и SellingVika с рабочей ссылкой на оригинальный
+           репозиторий.
+
+        в. Вы НЕ используете переиспользованный код в коммерческом
+           продукте без отдельного письменного разрешения (раздел 3.4).
+
+
+3. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО
+
+   3.1. УДАЛЕНИЕ ИЛИ ИЗМЕНЕНИЕ ЗАГОЛОВКА.
+        Удаление, изменение, маскировка, кодирование, обфускация,
+        разделение, перемещение, комментирование или иное делание
+        строки `-- Made by SellingVika` нечитаемой или отсутствующей
+        в ЛЮБОМ `.lua` файле - запрещено при любых обстоятельствах.
+        Это применяется к оригиналу, всем Форкам, всем перераспро-
+        странениям и всем производным работам в любой форме.
+
+   3.2. ПРИСВОЕНИЕ АВТОРСТВА.
+        Распространение Trainfitter (модифицированного или нет) с
+        представлением себя, своей команды или любого третьего лица
+        как оригинального автора Программного обеспечения, его
+        интерфейса, его сканера безопасности, его песочницы или
+        любого из его существенных компонентов - является плагиатом
+        и запрещено.
+
+   3.3. ИСПОЛЬЗОВАНИЕ ИМЕНИ "TRAINFITTER".
+        Публичные Форки, производные работы, переупакованные версии,
+        сборки серверов, Workshop-загрузки или любое иное
+        распространение НЕ должны использовать имя "Trainfitter" как
+        собственный идентификатор. Имя "Trainfitter" относится
+        исключительно к данному Программному обеспечению от
+        SellingVika.
+
+   3.4. КОММЕРЧЕСКОЕ ИСПОЛЬЗОВАНИЕ БЕЗ ПИСЬМЕННОГО РАЗРЕШЕНИЯ.
+        Продажа Trainfitter или любых модификаций, включая но не
+        ограничиваясь:
+          - Перепродажа как самостоятельный продукт;
+          - Включение в платные сервер-паки или "премиум" пакеты;
+          - Закрытие функций предоставляемых Trainfitter за платными
+            подписками или VIP-тарифами;
+          - Включение в коммерческие предложения серверного хостинга;
+          - Продажа сопровождения или установочных услуг как
+            единственного продукта;
+          - Включение в платный курс, платный туториал-пакет или
+            платный ассет-пак;
+        - без предварительного письменного разрешения Автора -
+        запрещено.
+
+        Бесплатные публичные серверы Garry's Mod явно разрешены, даже
+        если они принимают не связанные с доступом добровольные донаты.
+
+   3.5. РАСПРОСТРАНЕНИЕ ОСЛАБЛЕННЫХ ВЕРСИЙ.
+        Распространение модифицированных версий ("Форков", переупаковок,
+        зеркал и т.д.) в которых что-либо из нижеперечисленного
+        отключено, удалено, ослаблено сверх официальных конваров,
+        или обойдено - запрещено:
+          - GMA-сканер (`Trainfitter.ScanGMA`);
+          - Сканер lua-содержимого (`Trainfitter.ValidateSkinLua`,
+            `Trainfitter.ValidateMaskLua`);
+          - Песочница (`Trainfitter.ExecSandboxed`);
+          - Двухуровневый path whitelist;
+          - Extension whitelist;
+          - Отбрасывание байткода;
+          - Лимит инструкций;
+          - Требование маркера;
+          - Material guard;
+          - Неймспейсинг хуков/таймеров;
+          - Проксирование entity;
+          - Любой rate-limit на net-handler-ах;
+          - Любой size cap на файлах, lua-содержимом или общих
+            размерах аддона.
+
+        Такой Форк ОПАСЕН для своих пользователей и вредит репутации
+        оригинала. Настройка поведения через официальные конвары
+        (`trainfitter_max_lua_kb`, `trainfitter_sandbox_instr_m`,
+        `trainfitter_reject_bytecode`, `trainfitter_allow_full_lua` и
+        т.д.) - нормально и для этого они существуют.
+
+   3.6. ПЕРЕЗАЛИВ В STEAM WORKSHOP ПОД СВОИМ ИМЕНЕМ.
+        Публикация Trainfitter (или любой модификации) в Steam Workshop
+        как собственного творения - запрещена. Поделиться через прямую
+        ссылку на GitHub или собственный файлохостинг - можно при
+        соблюдении всех прочих условий данной Лицензии.
+
+   3.7. ИСПОЛЬЗОВАНИЕ ДЛЯ НАРУШЕНИЯ ДРУГИХ ПРАВИЛ.
+        Использование Trainfitter для нарушения Steam Subscriber
+        Agreement, правил Garry's Mod, политик аддонов Facepunch,
+        или для содействия нелегальной активности на любом сервере
+        - запрещено.
+
+   3.8. ВВОДЯЩАЯ В ЗАБЛУЖДЕНИЕ МАРКИРОВКА.
+        Распространение Программного обеспечения (или любого Форка)
+        с вводящими в заблуждение маркировками типа "официальный",
+        "стабильный релиз Trainfitter", "наследник Trainfitter",
+        "команда Trainfitter" или любым иным подразумевающим
+        одобрение или аффилиацию с SellingVika - запрещено, если
+        такое одобрение реально не существует и не может быть
+        доказано.
+
+
+4. ТРЕБОВАНИЯ К АТРИБУЦИИ
+
+   При публикации Форка, перераспространения или частичного
+   использования - включайте следующие credits в видимом месте
+   (обычно README, About-экран или `credits.txt`):
+
+       Trainfitter by SellingVika
+       https://sellingvika.party/
+       Оригинальный репозиторий: <ссылка на оригинальный репозиторий>
+
+   Заголовок в каждом `.lua` файле уже служит этой цели для in-code
+   атрибуции и обязателен в дополнение к указанному выше.
+
+
+5. ОТКАЗ ОТ ГАРАНТИЙ
+
+   ДАННОЕ ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ ПРЕДОСТАВЛЯЕТСЯ "КАК ЕСТЬ", БЕЗ
+   КАКИХ-ЛИБО ГАРАНТИЙ, ЯВНЫХ ИЛИ ПОДРАЗУМЕВАЕМЫХ, ВКЛЮЧАЯ НО НЕ
+   ОГРАНИЧИВАЯСЬ ГАРАНТИЯМИ ПРИГОДНОСТИ ДЛЯ КОНКРЕТНОЙ ЦЕЛИ,
+   КОММЕРЧЕСКОЙ ПРИГОДНОСТИ, НЕНАРУШЕНИЯ ПРАВ И СОХРАННОСТИ ДАННЫХ.
+
+   НИ ПРИ КАКИХ ОБСТОЯТЕЛЬСТВАХ АВТОР НЕ НЕСЁТ ОТВЕТСТВЕННОСТИ ЗА
+   ЛЮБЫЕ ПРЕТЕНЗИИ, УЩЕРБ, ПОТЕРЮ ДАННЫХ, ПРОСТОЙ СЕРВЕРА, БАНЫ ОТ
+   STEAM ИЛИ GARRY'S MOD, УЩЕРБ РЕПУТАЦИИ, ПОТЕРЮ ПОДПИСЧИКОВ ИЛИ
+   ИНУЮ ОТВЕТСТВЕННОСТЬ ВОЗНИКАЮЩУЮ В СВЯЗИ С ИСПОЛЬЗОВАНИЕМ,
+   НЕПРАВИЛЬНЫМ ИСПОЛЬЗОВАНИЕМ ИЛИ НЕВОЗМОЖНОСТЬЮ ИСПОЛЬЗОВАНИЯ
+   ДАННОГО ПО, БУДЬ ТО В РЕЗУЛЬТАТЕ ДОГОВОРА, ДЕЛИКТА ИЛИ ИНОГО.
+
+   Пользователи устанавливают и эксплуатируют Trainfitter на свой
+   страх и риск.
+
+
+6. ПРЕКРАЩЕНИЕ ДЕЙСТВИЯ
+
+   Нарушение любого условия данной Лицензии приводит к НЕМЕДЛЕННОМУ
+   и АВТОМАТИЧЕСКОМУ прекращению всех предоставленных прав без
+   необходимости предварительного уведомления. При обнаружении
+   нарушения Автор может по собственному усмотрению:
+
+   а. Требовать немедленного удаления неавторизованных копий с
+      любых платформ, включая но не ограничиваясь GitHub, Steam
+      Workshop, файлохостингами, веб-сайтами, серверными
+      установками.
+
+   б. Подавать DMCA-уведомления соответствующим хостинг-платформам.
+
+   в. Предпринимать юридические действия в рамках применимого
+      авторского права и законодательства юрисдикции нарушителя.
+
+   г. Публично идентифицировать нарушителя и характер нарушения в
+      community-каналах аддона.
+
+   Возврат к соблюдению условий после нарушения НЕ восстанавливает
+   автоматически прекращённые права. Необходимо получить новое
+   письменное разрешение Автора.
+
+
+7. КОНТАКТ ДЛЯ РАЗРЕШЕНИЙ
+
+   По вопросам коммерческого лицензирования, интеграции в
+   проприетарные продукты, продажи или любого использования НЕ
+   покрытого разделами 1 и 2:
+
+       Email:   sellingvika@gmail.com
+       Website: https://sellingvika.party/
+
+   Отправляйте запрос ДО использования. Отсутствие письменного
+   разрешения означает что разрешение НЕ предоставлено.
+
+   Автор оставляет за собой право предоставлять, отклонять или
+   прикреплять условия к любому запросу разрешения, по собственному
+   усмотрению.
+
+
+8. ДЕЛИМОСТЬ
+
+   Если какое-либо положение данной Лицензии будет признано не
+   имеющим силы в конкретной юрисдикции, остальные положения
+   сохраняют полную силу, а не имеющее силы положение должно
+   толковаться в манере наиболее близкой к его оригинальному
+   намерению, которую допускает юрисдикция.
+
+
+9. РУКОВОДЯЩИЙ ДУХ
+
+   Если сомневаетесь разрешено ли что-либо: скорее всего нет.
+   Напишите sellingvika@gmail.com и спросите. Разрешение часто
+   даётся для честных запросов; отказ зарезервирован для случаев
+   которые противоречат духу данной Лицензии.
+
+
+================================================================================
+                                   DANSK
+================================================================================
+
+
+Trainfitter er proprietær software af SellingVika under en CUSTOM
+proprietær licens - ikke MIT, ikke GPL. Læs den engelske eller
+russiske sektion ovenfor for komplet juridisk tekst.
+
+KORT OVERSIGT:
+
+Tilladt:
+  - Installation og brug på din egen Garry's Mod-server gratis
+  - Læse og inspicere kildekoden
+  - Indsende pull requests og bug-reports
+  - Omtale i reviews, samlinger, videoer (med kredit til SellingVika)
+  - Personlige modifikationer for egen brug (uden videregivelse)
+  - Justere adfærd via officielle convars (`trainfitter_*`)
+
+Tilladt med betingelser (se sektion 2 ovenfor for detaljer):
+  - Offentlige forks med bevaret `-- Made by SellingVika` header,
+    afledt navn (ikke "Trainfitter"), link til original, uændrede
+    sikkerhedsmekanismer, CHANGELOG
+  - Genbrug af kodedele med kredit til SellingVika og Trainfitter
+
+Forbudt:
+  - Fjerne, ændre eller skjule `-- Made by SellingVika` header
+  - Hævde at være forfatteren
+  - Bruge navnet "Trainfitter" til forks
+  - Kommerciel brug uden skriftlig tilladelse
+  - Distribuere "svækkede versioner" (forks med deaktiverede
+    sikkerhedsmekanismer)
+  - Uploade til Steam Workshop under dit eget navn
+  - Vildledende mærkning ("officielle", "stabil release" osv)
+
+Overtrædelse = automatisk ophør af alle rettigheder + mulig DMCA +
+mulig retssag.
+
+Kontakt for tilladelser: sellingvika@gmail.com
+
+Softwaren leveres SOM DEN ER uden garantier. Forfatteren har intet
+ansvar for skader fra brugen.
+
+
+================================================================================
+                                  CONTACT
+================================================================================
+
+   SellingVika
+   Email:   sellingvika@gmail.com
+   Website: https://sellingvika.party/
+
+   For commercial licensing, attribution disputes, takedown requests,
+   or any legal matters: contact via the email above, in English or
+   Russian.
+
+   По вопросам коммерческого лицензирования, споров об атрибуции,
+   запросов на удаление или иных юридических вопросов: связь по
+   указанному email, на английском или русском.
+
+
+                          - End of Trainfitter License -

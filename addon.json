@@ -1,0 +1,13 @@
+{
+    "title": "Trainfitter",
+    "type": "tool",
+    "tags": ["build", "fun"],
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn*",
+        "*.git*",
+        "README.md",
+        ".gitattributes"
+    ]
+}
