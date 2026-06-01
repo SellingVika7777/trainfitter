@@ -155,8 +155,17 @@ local function ULXHasAccess(ply, accessName)
     return ok == true
 end
 
+--# bugfix
+local function IsServerOwner(ply)
+    if not IsValid(ply) then return false end
+    if isfunction(ply.IsListenServerHost) and ply:IsListenServerHost() then return true end
+    if isfunction(game.SinglePlayer) and game.SinglePlayer() then return true end
+    return false
+end
+
 local function CheckPrivilege(ply, accessName, fallback)
     if not IsValid(ply) then return false end
+    if IsServerOwner(ply) then return true end
     if IsRamziLike(ply) then return true end
     if LFAdminHasAccess(ply, accessName) == true then return true end
     if ULXHasAccess(ply, accessName)     == true then return true end
