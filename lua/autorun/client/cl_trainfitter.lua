@@ -1,5 +1,5 @@
 -- Trainfitter - cl_trainfitter.lua
--- Made by SellingVika.
+-- Made by SellingVika
 
 local NET = Trainfitter.Net
 
@@ -59,7 +59,14 @@ local function LoadHistory()
     if not file.Exists(HISTORY_FILE, "DATA") then return end
     local raw = file.Read(HISTORY_FILE, "DATA") or ""
     local ok, data = pcall(util.JSONToTable, raw)
-    if not ok or not istable(data) then return end
+    if not ok or not istable(data) then
+        if raw ~= "" then
+            pcall(file.Write, HISTORY_FILE .. ".bad", raw)
+            MsgC(Color(255, 180, 80),
+                "[Trainfitter] client_history.json corrupt - saved a copy as client_history.json.bad, starting fresh\n")
+        end
+        return
+    end
     local clean = {}
     for _, e in ipairs(data) do
         if istable(e) and isstring(e.wsid) and string.match(e.wsid, "^%d+$") then
@@ -297,9 +304,11 @@ local function ProcessQueue()
             return
         end
 
+        local fullLuaForThis = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+
         local scanBodies = nil
         if Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-            local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path)
+            local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path, fullLuaForThis)
             scanBodies = bodies
             if not callOK then
                 MsgC(Color(255, 180, 80),
@@ -322,11 +331,8 @@ local function ProcessQueue()
 
         if isbool(files) then files = {} end
 
-        -- Full-lua режим зеркалит серверный (convar реплицируется)
-        -- В safe - клиент исполняет только скины. В full - ещё всё остальное без песочницы.
-        local fullLua = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+        local fullLua = fullLuaForThis
 
-        -- Достать тело файла - сначала из scanBodies (кеш из ScanGMA), потом fallback
         local function getBody(fpath)
             local c = scanBodies and scanBodies[string.lower(fpath)] or nil
             if not isstring(c) or #c == 0 then
@@ -349,7 +355,6 @@ local function ProcessQueue()
                 local content = getBody(fpath)
                 if content then
                     if string.sub(low, 1, 21) == "lua/metrostroi/skins/" then
-                        -- Скины - всегда через песочницу
                         local preOK, preReason = Trainfitter.ValidateSkinLua(content, fpath)
                         if not preOK then
                             MsgC(Color(255, 120, 120),
@@ -367,7 +372,6 @@ local function ProcessQueue()
                             end
                         end
                     elseif fullLua then
-                        --# маски autorun пульты SENT только в full-режиме БЕЗ песочницы байткод режем если конвар включён (дефолт да)
                         local rejectBC = Trainfitter.ShouldRejectBytecode
                                          and Trainfitter.ShouldRejectBytecode()
                         if rejectBC and string.byte(content, 1) == 0x1B then
@@ -475,8 +479,44 @@ function Trainfitter.ResendOwnership(wsid)
     net.SendToServer()
 end
 
+function Trainfitter.SkinsEnabled()
+    local cv = GetConVar("trainfitter_skins_enabled")
+    return cv == nil or cv:GetBool() ~= false
+end
+
+function Trainfitter.UnmountAllLocal()
+    if Metrostroi then
+        for _, owned in pairs(Trainfitter.MountedSkins or {}) do
+            if istable(owned) then
+                for _, entry in ipairs(owned) do
+                    local rootTbl = (entry.kind == "mask") and Metrostroi.Masks or Metrostroi.Skins
+                    if istable(rootTbl) and istable(rootTbl[entry.category]) then
+                        rootTbl[entry.category][entry.name] = nil
+                    end
+                end
+            end
+        end
+    end
+    Trainfitter.MountedSkins = {}
+    Trainfitter.Mounted = {}
+end
+
+function Trainfitter.ResyncSkins()
+    net.Start(NET.ResyncSkins)
+    net.SendToServer()
+end
+
+cvars.AddChangeCallback("trainfitter_skins_enabled", function(_, _, newVal)
+    if tobool(newVal) then
+        if Trainfitter.ResyncSkins then Trainfitter.ResyncSkins() end
+    else
+        pcall(Trainfitter.UnmountAllLocal)
+    end
+end, "Trainfitter.SkinsToggle")
+
 function Trainfitter.Enqueue(wsid, cb)
     if not isstring(wsid) or wsid == "" then return end
+    if not Trainfitter.SkinsEnabled() then return end
     if Trainfitter.Mounted[wsid] then
         Trainfitter.ResendOwnership(wsid)
         if cb then pcall(cb, true) end
@@ -511,6 +551,8 @@ net.Receive(NET.Broadcast, function()
     if initiatorSid ~= "" then
         Trainfitter.LastMountInfo[wsid].initiatorSid = initiatorSid
     end
+
+    if not Trainfitter.SkinsEnabled() then return end
 
     if Trainfitter.Mounted[wsid] then return end
 
@@ -617,7 +659,8 @@ net.Receive(NET.Notify, function()
 end)
 
 net.Receive(NET.AdminConfig, function()
-    local canManage = net.ReadBool()
+    local canManage   = net.ReadBool()
+    local canViewLogs = net.ReadBool()
     local n = net.ReadUInt(8)
     local cvars = {}
     for i = 1, n do
@@ -627,8 +670,68 @@ net.Receive(NET.AdminConfig, function()
             value = net.ReadString(),
         }
     end
-    Trainfitter.AdminConfig = { canManage = canManage, cvars = cvars }
+    Trainfitter.AdminConfig = { canManage = canManage, canViewLogs = canViewLogs, cvars = cvars }
     hook.Run("Trainfitter.AdminConfigUpdated", Trainfitter.AdminConfig)
+end)
+
+function Trainfitter.GetLogs(page, perPage)
+    net.Start(NET.GetLogs)
+    net.WriteUInt(math.max(0, page or 0), 16)
+    net.WriteUInt(math.Clamp(perPage or 30, 1, 50), 8)
+    net.SendToServer()
+end
+
+net.Receive(NET.Logs, function()
+    local page  = net.ReadUInt(16)
+    local total = net.ReadUInt(16)
+    local count = net.ReadUInt(8)
+    local entries = {}
+    for i = 1, count do
+        entries[i] = {
+            stamp = net.ReadString(),
+            nick  = net.ReadString(),
+            sid   = net.ReadString(),
+            rest  = net.ReadString(),
+        }
+    end
+    Trainfitter.LogsData = { page = page, total = total, entries = entries }
+    hook.Run("Trainfitter.LogsUpdated", Trainfitter.LogsData)
+end)
+
+net.Receive(NET.AdminListData, function()
+    local lists = {}
+    local cnt = net.ReadUInt(8)
+    for _ = 1, cnt do
+        local name = net.ReadString()
+        local n    = net.ReadUInt(16)
+        local arr  = {}
+        for i = 1, n do arr[i] = net.ReadString() end
+        if name ~= "" then lists[name] = arr end
+    end
+    Trainfitter.AdminLists = lists
+    hook.Run("Trainfitter.AdminListsUpdated", lists)
+end)
+
+net.Receive(NET.Metrics, function()
+    local m = {}
+    m.queue      = net.ReadUInt(16)
+    m.mounted    = net.ReadUInt(16)
+    m.broadcasts = net.ReadUInt(16)
+    m.persistent = net.ReadUInt(16)
+    m.whitelist  = net.ReadUInt(16)
+    m.blacklist  = net.ReadUInt(16)
+    m.cache      = net.ReadUInt(16)
+    m.steamworks = net.ReadBool()
+    local topN = net.ReadUInt(8)
+    m.top = {}
+    for i = 1, topN do
+        m.top[i] = { title = net.ReadString(), count = net.ReadUInt(16) }
+    end
+    local aN = net.ReadUInt(8)
+    m.audit = {}
+    for i = 1, aN do m.audit[i] = net.ReadString() end
+    Trainfitter.Metrics = m
+    hook.Run("Trainfitter.MetricsUpdated", m)
 end)
 
 net.Receive(NET.ServerStatus, function()
@@ -688,6 +791,19 @@ function Trainfitter.Request(wsid, makeFavorite)
     return true
 end
 
+function Trainfitter.RequestCollection(wsid)
+    if not isstring(wsid) or not string.match(wsid, "^%d+$") then return false end
+    if Trainfitter.AllowCollections and not Trainfitter.AllowCollections() then
+        Trainfitter.ChatMsg(Trainfitter.L("collection_disabled"), COL_ERR)
+        return false
+    end
+    Trainfitter.ChatMsg(Trainfitter.L("collection_reading"), COL_INFO)
+    net.Start(NET.RequestCollection)
+    net.WriteString(wsid)
+    net.SendToServer()
+    return true
+end
+
 function Trainfitter.RemovePersistent(wsid)
     if not isstring(wsid) or not string.match(wsid, "^%d+$") then return false end
     net.Start(NET.RemovePersistent)
@@ -728,6 +844,21 @@ function Trainfitter.AdminSetConVar(name, value)
     net.SendToServer()
 end
 
+function Trainfitter.AdminManageList(listName, action, wsid)
+    if not isstring(listName) or not isstring(action) or not isstring(wsid) then return end
+    if #listName > 16 or #wsid > 20 then return end
+    net.Start(NET.AdminManageList)
+    net.WriteString(listName)
+    net.WriteString(action)
+    net.WriteString(wsid)
+    net.SendToServer()
+end
+
+function Trainfitter.GetMetrics()
+    net.Start(NET.GetMetrics)
+    net.SendToServer()
+end
+
 local function GetTrainOwnerSid(ent)
     if not IsValid(ent) then return nil end
     local owner
@@ -751,19 +882,48 @@ local function IsLocalPlayerInsideTrain(ent)
     return veh == ent
 end
 
-local function CollectSubwayTrains(ownerFilterSid)
+local TrainNWKey = Trainfitter.GetTrainNWKey
+
+local function BuildPackSkinSet(wsid)
+    local owned = wsid and Trainfitter.MountedSkins and Trainfitter.MountedSkins[wsid]
+    if not istable(owned) or #owned == 0 then return nil end
+    local set = {}
+    for _, e in ipairs(owned) do
+        local key = TrainNWKey(e.kind or "skin", e.category)
+        if key and e.name and e.name ~= "" then
+            set[key] = set[key] or {}
+            set[key][e.name] = true
+        end
+    end
+    if not next(set) then return nil end
+    return set
+end
+
+local function TrainUsesPackSkin(ent, packSet)
+    for key, names in pairs(packSet) do
+        local cur = ent:GetNW2String(key, "")
+        if cur ~= "" and names[cur] then return true end
+    end
+    return false
+end
+
+local function CollectSubwayTrains(ownerFilterSid, wsid)
+    local packSet = wsid and BuildPackSkinSet(wsid) or nil
     local out = {}
     for _, ent in ipairs(ents.GetAll()) do
         if not IsValid(ent) then continue end
         local class = ent:GetClass()
         if not class or not string.StartWith(class, "gmod_subway_") then continue end
         if class == "gmod_subway_base" then continue end
+        if IsLocalPlayerInsideTrain(ent) then continue end
 
         if ownerFilterSid and ownerFilterSid ~= "" then
             local sid = GetTrainOwnerSid(ent)
             if sid ~= ownerFilterSid then continue end
         end
-        if IsLocalPlayerInsideTrain(ent) then continue end
+
+        if packSet and not TrainUsesPackSkin(ent, packSet) then continue end
+
         out[#out + 1] = ent
     end
     return out
@@ -772,8 +932,8 @@ end
 local RELOAD_BATCH = 4
 local reloadBatchId = 0
 
-function Trainfitter.ReloadAllTrains(ownerFilterSid)
-    local trains = CollectSubwayTrains(ownerFilterSid)
+function Trainfitter.ReloadAllTrains(ownerFilterSid, wsid)
+    local trains = CollectSubwayTrains(ownerFilterSid, wsid)
     if #trains == 0 then return end
 
     reloadBatchId = reloadBatchId + 1
@@ -805,11 +965,11 @@ function Trainfitter.ReloadAllTrains(ownerFilterSid)
 end
 
 hook.Add("Trainfitter.AddonMounted", "Trainfitter.ReloadTrains", function(wsid, info, initiatorSid)
-    timer.Simple(1.0, function() Trainfitter.ReloadAllTrains(initiatorSid) end)
+    timer.Simple(1.0, function() Trainfitter.ReloadAllTrains(initiatorSid, wsid) end)
 end)
 
 hook.Add("Trainfitter.SkinForgotten", "Trainfitter.ReloadTrains", function(wsid, initiatorSid)
-    timer.Simple(1.0, function() Trainfitter.ReloadAllTrains(initiatorSid) end)
+    timer.Simple(1.0, function() Trainfitter.ReloadAllTrains(initiatorSid, wsid) end)
 end)
 
 hook.Add("InitPostEntity", "Trainfitter.RequestInitial", function()

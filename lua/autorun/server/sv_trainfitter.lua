@@ -1,5 +1,5 @@
 -- Trainfitter - sv_trainfitter.lua
--- Made by SellingVika.
+-- Made by SellingVika
 
 if not steamworks or not isfunction(steamworks.DownloadUGC) then
     local hasModule = isfunction(util.IsBinaryModuleInstalled)
@@ -54,6 +54,21 @@ local lastListReq      = {}
 local lastStatusReq    = {}
 local lastAdminGet     = {}
 local lastReportSkins  = {}
+local lastNetGlobal    = {}
+local lastMetricsReq   = {}
+
+local NET_GLOBAL_COOLDOWN = 0.5
+
+local function NetGlobalThrottled(ply)
+    if not IsValid(ply) then return true end
+    local sid = ply:SteamID64() or "0"
+    local now = CurTime()
+    if lastNetGlobal[sid] and (now - lastNetGlobal[sid]) < NET_GLOBAL_COOLDOWN then
+        return true
+    end
+    lastNetGlobal[sid] = now
+    return false
+end
 
 local function IsValidWSID(s)
     if not isstring(s) then return false end
@@ -168,6 +183,7 @@ local function LoadPersistent()
     local data = ReadJSON(PERSIST_FILE, {})
     local clean = {}
     local maxP = GetConVar("trainfitter_max_persistent"):GetInt()
+    if maxP <= 0 then maxP = math.huge end
     local dropped = 0
     for _, wsid in ipairs(data) do
         if IsValidWSID(wsid) then
@@ -201,9 +217,18 @@ local function ArrayFromSet(s)
     return arr
 end
 
+local function FillSetInPlace(setTbl, arr)
+    for k in pairs(setTbl) do setTbl[k] = nil end
+    if istable(arr) then
+        for _, v in ipairs(arr) do
+            if isstring(v) and v ~= "" then setTbl[v] = true end
+        end
+    end
+end
+
 local function LoadLists()
-    Trainfitter.Whitelist = SetFromArray(ReadJSON(WHITELIST_FILE, {}))
-    Trainfitter.Blacklist = SetFromArray(ReadJSON(BLACKLIST_FILE, {}))
+    FillSetInPlace(Trainfitter.Whitelist, ReadJSON(WHITELIST_FILE, {}))
+    FillSetInPlace(Trainfitter.Blacklist, ReadJSON(BLACKLIST_FILE, {}))
 end
 
 local function SaveWhitelist() WriteJSON(WHITELIST_FILE, ArrayFromSet(Trainfitter.Whitelist)) end
@@ -384,6 +409,7 @@ local function HttpFetchGMA(wsid, callback)
             pcall(steamworks.Subscribe, wsid)
 
             local timerName = "trainfitter_sub_wait_" .. wsid
+            if timer.Exists(timerName) then timer.Remove(timerName) end
             local elapsed   = 0
             local maxWait   = 60
             timer.Create(timerName, 1, maxWait, function()
@@ -422,24 +448,28 @@ local function SnapshotMetrostroiTable(t)
     return snap
 end
 
-local function ServerExecuteSkinFiles(files, wsid, luaBodies)
+local function ServerExecuteSkinFiles(files, wsid, luaBodies, fullLua)
     if not istable(files) then return 0 end
     if not istable(luaBodies) then luaBodies = nil end
     local beforeSkins = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Skins) or {}
     local beforeMasks = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Masks) or {}
 
-    -- Full-lua режим - пускает пульты/SENT-ы и т.п., БЕЗ песочницы
-    -- Опасно, потому включается отдельным конваром trainfitter_allow_full_lua
-    local fullLua = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+    fullLua = fullLua == true
+
+    local initiatorSid = "?"
+    local pend = Trainfitter.PendingRequest and Trainfitter.PendingRequest[wsid]
+    if istable(pend) and pend.initiatorSid then initiatorSid = pend.initiatorSid end
 
     if fullLua then
         MsgC(Color(255, 200, 100),
             "[Trainfitter] full-lua mode ACTIVE for " .. tostring(wsid) ..
             " - addon lua will run UNSANDBOXED with full server permissions\n")
+        if Audit then
+            pcall(Audit, nil, "fulllua_active",
+                tostring(wsid) .. " initiator=" .. tostring(initiatorSid))
+        end
     end
 
-    -- Достать тело файла - сначала из luaBodies (закешировано при скане GMA)
-    -- если нет - fallback на file.Read (который может быть захукан анти-читом)
     local function readBody(fp)
         local c = luaBodies and luaBodies[string.lower(fp)] or nil
         if not isstring(c) or #c == 0 then
@@ -449,7 +479,6 @@ local function ServerExecuteSkinFiles(files, wsid, luaBodies)
         return c
     end
 
-    -- Сандбоксное исполнение скина или маски (kind = "skin" | "mask")
     local function execFile(fp, kind)
         local c = readBody(fp)
         if not c then return false end
@@ -471,25 +500,19 @@ local function ServerExecuteSkinFiles(files, wsid, luaBodies)
         if not ok then
             MsgC(Color(255, 120, 120),
                 "[Trainfitter] Sandboxed exec failed for "
-                .. fp .. ": " .. tostring(err) .. "\n")
+                .. tostring(wsid) .. " :: " .. fp .. ": " .. tostring(err) .. "\n")
             if Audit then
-                pcall(Audit, nil, "lua_sandbox_failed", fp .. " :: " .. tostring(err))
+                pcall(Audit, nil, "lua_sandbox_failed", tostring(wsid) .. " :: " .. fp .. " :: " .. tostring(err))
             end
             return false
         end
         return true
     end
 
-    -- Несандбоксное исполнение для full-lua режима
-    -- Компилирует и пускает в глобальном env, как обычный gmod-файл
-    -- Только для путей разрешённых в LUA_ALLOWED_PREFIXES_FULL
-    -- Опасно: код получает полные права. Используется ТОЛЬКО когда админ
-    -- сам включил trainfitter_allow_full_lua
     local function execFileUnsandboxed(fp)
         local c = readBody(fp)
         if not c then return false end
 
-        --# режем байткод если включён конвар (дефолт да) даже в full-режиме это вход одной строкой во всё что угодно
         if Trainfitter.ShouldRejectBytecode and Trainfitter.ShouldRejectBytecode()
            and string.byte(c, 1) == 0x1B then
             MsgC(Color(255, 120, 120),
@@ -505,12 +528,18 @@ local function ServerExecuteSkinFiles(files, wsid, luaBodies)
         end
         if not isfunction(fn) then return false end
 
+        if Audit then
+            pcall(Audit, nil, "fulllua_exec",
+                tostring(wsid) .. " :: " .. fp .. " :: initiator=" .. tostring(initiatorSid))
+        end
+
         local ok, runErr = pcall(fn)
         if not ok then
             MsgC(Color(255, 180, 80),
-                "[Trainfitter] Unsandboxed exec error in " .. fp .. ": " .. tostring(runErr) .. "\n")
+                "[Trainfitter] Unsandboxed exec error in " .. tostring(wsid) .. " :: " .. fp .. ": " .. tostring(runErr) .. "\n")
             if Audit then
-                pcall(Audit, nil, "lua_fulllua_runtime_error", fp .. " :: " .. tostring(runErr))
+                pcall(Audit, nil, "lua_fulllua_runtime_error",
+                    tostring(wsid) .. " :: " .. fp .. " :: " .. tostring(runErr))
             end
             return false
         end
@@ -529,16 +558,9 @@ local function ServerExecuteSkinFiles(files, wsid, luaBodies)
             local low = string.lower(fpath)
             local rel = string.sub(low, 5)
             if string.sub(low, 1, 21) == "lua/metrostroi/skins/" then
-                -- Скины - ВСЕГДА через песочницу, это data-only
-                -- Работают независимо от full-lua режима
                 if execFile(fpath, "skin") then executed = executed + 1 end
                 pcall(AddCSLuaFile, rel)
             elseif fullLua then
-                -- Всё остальное lua (маски, autorun, пульты, SENT, effects) -
-                -- только когда юзер включил trainfitter_allow_full_lua
-                -- БЕЗ песочницы - потому что пультам/SENT-ам нужен полный API
-                -- ScanGMA в safe-режиме уже отверг бы такие GMA, так что сюда
-                -- мы вообще не попадём пока fullLua=false
                 if execFileUnsandboxed(fpath) then executed = executed + 1 end
                 pcall(AddCSLuaFile, rel)
             end
@@ -614,9 +636,11 @@ local function onGMAReady(wsid, path)
         return
     end
 
+    local fullLuaForThis = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+
     local scanBodies = nil
     if Trainfitter.ScanGMA and Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-        local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path)
+        local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path, fullLuaForThis)
         scanBodies = bodies
         if not callOK then
             MsgC(Color(255, 120, 120), string.format(
@@ -647,19 +671,27 @@ local function onGMAReady(wsid, path)
         end
     end
 
-    local ok, files = game.MountGMA(path)
-    if ok and istable(files) then
-        Trainfitter.MountedServer[wsid] = true
-        local executed = ServerExecuteSkinFiles(files, wsid, scanBodies)
-        MsgC(Color(120, 220, 150), string.format(
-            "[Trainfitter] Server mounted %s: %d skin scripts executed\n",
-            wsid, executed))
-        finalize(wsid, true)
-    else
+    local mountOK, mountErr = pcall(function()
+        local ok, files = game.MountGMA(path)
+        if ok and istable(files) then
+            Trainfitter.MountedServer[wsid] = true
+            local executed = ServerExecuteSkinFiles(files, wsid, scanBodies, fullLuaForThis)
+            MsgC(Color(120, 220, 150), string.format(
+                "[Trainfitter] Server mounted %s: %d skin scripts executed\n",
+                wsid, executed))
+            finalize(wsid, true)
+        else
+            MsgC(Color(255, 120, 120), string.format(
+                "[Trainfitter] MountGMA failed for %s\n", wsid))
+            InvalidateGMACache(wsid)
+            finalize(wsid, false, "MountGMA failed")
+        end
+    end)
+    if not mountOK then
         MsgC(Color(255, 120, 120), string.format(
-            "[Trainfitter] MountGMA failed for %s\n", wsid))
-        InvalidateGMACache(wsid)
-        finalize(wsid, false, "MountGMA failed")
+            "[Trainfitter] mount/exec threw for %s: %s\n", wsid, tostring(mountErr)))
+        if Audit then pcall(Audit, nil, "mount_exec_threw", wsid .. " :: " .. tostring(mountErr)) end
+        finalize(wsid, false, "mount/exec error")
     end
     serverMountInFlight = false
     processServerMountQueue()
@@ -766,6 +798,7 @@ local function SendPersistentList(target)
     if target then net.Send(target) else net.Broadcast() end
 end
 
+
 local function BroadcastDownload(wsid, initiatorName, title, sizeMB, initiatorSid)
     Trainfitter.SessionBroadcast[wsid] = {
         title         = title or "",
@@ -784,25 +817,7 @@ local function BroadcastDownload(wsid, initiatorName, title, sizeMB, initiatorSi
     net.Broadcast()
 end
 
-local SKIN_NW_KEYS = {
-    train = "Texture",
-    pass  = "PassTexture",
-    cab   = "CabTexture",
-}
-
-local MASK_NW_KEYS = {
-    front    = "MaskTexture",
-    mask     = "MaskTexture",
-    rear     = "RearMaskTexture",
-    rearmask = "RearMaskTexture",
-}
-
-local function GetTrainNWKey(kind, category)
-    if kind == "mask" then
-        return MASK_NW_KEYS[category]
-    end
-    return SKIN_NW_KEYS[category]
-end
+local GetTrainNWKey = Trainfitter.GetTrainNWKey
 
 local function ResetTrainsForOwnedSkins(owned)
     if not istable(owned) then return 0 end
@@ -819,16 +834,16 @@ local function ResetTrainsForOwnedSkins(owned)
 
     local reset = 0
     for _, ent in ipairs(ents.GetAll()) do
-        if IsValid(ent) then
-            local class = ent:GetClass()
-            if class and string.StartWith(class, "gmod_subway_")
-               and class ~= "gmod_subway_base" then
-                for key, names in pairs(byKey) do
-                    local current = ent:GetNW2String(key, "")
-                    if names[current] then
-                        ent:SetNW2String(key, "")
-                        reset = reset + 1
-                    end
+        if not IsValid(ent) then continue end
+        local class = ent:GetClass()
+        if class and string.StartWith(class, "gmod_subway_")
+           and class ~= "gmod_subway_base" then
+            for key, names in pairs(byKey) do
+                if not IsValid(ent) then break end
+                local current = ent:GetNW2String(key, "")
+                if names[current] then
+                    ent:SetNW2String(key, "")
+                    reset = reset + 1
                 end
             end
         end
@@ -890,8 +905,36 @@ local function SendActiveSkin(target)
     if target then net.Send(target) else net.Broadcast() end
 end
 
+local function IsPersistentWsid(w)
+    for _, pw in ipairs(Trainfitter.Persistent) do
+        if pw == w then return true end
+    end
+    return false
+end
+
+local function TrimOwnSessionSkins(sid, perCap, keepWsid)
+    if not sid or sid == "" then return end
+    if perCap == math.huge then return end
+
+    local mine = {}
+    for w, d in pairs(Trainfitter.SessionBroadcast) do
+        if w ~= keepWsid and istable(d) and d.initiatorSid == sid and not IsPersistentWsid(w) then
+            mine[#mine + 1] = { wsid = w, since = d.since or 0 }
+        end
+    end
+
+    local keepOthers = perCap - 1
+    if keepOthers < 0 then keepOthers = 0 end
+    if #mine <= keepOthers then return end
+
+    table.sort(mine, function(a, b) return a.since < b.since end)
+    while #mine > keepOthers do
+        local victim = table.remove(mine, 1)
+        BroadcastForget(victim.wsid, sid)
+    end
+end
+
 local function SetActiveSkin(wsid, title, sizeMB, initiatorName, initiatorSid)
-    local old = Trainfitter.ActiveSkin
     Trainfitter.ActiveSkin = {
         wsid         = wsid,
         title        = title or "",
@@ -901,19 +944,38 @@ local function SetActiveSkin(wsid, title, sizeMB, initiatorName, initiatorSid)
         since        = os.time(),
     }
     SendActiveSkin()
-
-    if old and old.wsid and old.wsid ~= wsid then
-        local inFav = false
-        for _, f in ipairs(Trainfitter.Persistent) do
-            if f == old.wsid then inFav = true break end
-        end
-        if not inFav then
-            BroadcastForget(old.wsid, initiatorSid)
-        end
-    end
 end
 
-local function HandleRequest(ply, wsid, makePersistent)
+local function CapOf(convarName)
+    local cv = GetConVar(convarName)
+    local n = cv and cv:GetInt() or 0
+    if n <= 0 then return math.huge end
+    return n
+end
+
+local function CountLoaded()
+    local seen = {}
+    for w in pairs(Trainfitter.SessionBroadcast) do seen[w] = true end
+    for w in pairs(Trainfitter.PendingRequest)  do seen[w] = true end
+    local n = 0
+    for _ in pairs(seen) do n = n + 1 end
+    return n
+end
+
+local function CountLoadedBy(sid)
+    local seen = {}
+    for w, d in pairs(Trainfitter.SessionBroadcast) do
+        if istable(d) and d.initiatorSid == sid then seen[w] = true end
+    end
+    for w, d in pairs(Trainfitter.PendingRequest) do
+        if istable(d) and d.initiatorSid == sid then seen[w] = true end
+    end
+    local n = 0
+    for _ in pairs(seen) do n = n + 1 end
+    return n
+end
+
+local function HandleRequest(ply, wsid, makePersistent, skipCooldown)
     if not IsValid(ply) then return end
 
     if not IsValidWSID(wsid) then
@@ -937,7 +999,7 @@ local function HandleRequest(ply, wsid, makePersistent)
     local sid = ply:SteamID64() or "0"
     local now = CurTime()
     local cd  = GetConVar("trainfitter_request_cooldown"):GetFloat()
-    if lastRequest[sid] and (now - lastRequest[sid]) < cd then
+    if not skipCooldown and lastRequest[sid] and (now - lastRequest[sid]) < cd then
         Notify(ply, "[Trainfitter] Slow down, take a breath",
             Color(255, 180, 80))
         return
@@ -957,6 +1019,18 @@ local function HandleRequest(ply, wsid, makePersistent)
         Notify(ply, "[Trainfitter] Only admins mark addons as persistent",
             Color(255, 100, 100))
         makePersistent = false
+    end
+
+    local adminTier = Trainfitter.CanMakePersistent(ply)
+    local alreadyLoaded = Trainfitter.SessionBroadcast[wsid] ~= nil
+        or Trainfitter.PendingRequest[wsid] ~= nil
+    if not alreadyLoaded then
+        if CountLoaded() >= CapOf("trainfitter_max_loaded") then
+            Notify(ply, "[Trainfitter] Server is at its loaded-addon limit, ask an admin",
+                Color(255, 100, 100))
+            Audit(ply, "load_limit_server", wsid)
+            return
+        end
     end
 
     local maxMB = GetConVar("trainfitter_max_mb"):GetInt()
@@ -997,6 +1071,7 @@ local function HandleRequest(ply, wsid, makePersistent)
             title           = Sanitize(info.title or "", 128),
             sizeMB          = sizeMB,
             makePersistent  = makePersistent,
+            adminTier       = adminTier,
             since           = os.time(),
         }
 
@@ -1040,6 +1115,10 @@ function Trainfitter.FinalizePending(wsid, ok, reason)
 
     BroadcastDownload(wsid, p.initiatorName or "", p.title or "", p.sizeMB or 0, p.initiatorSid or "")
     SetActiveSkin(wsid, p.title, p.sizeMB, p.initiatorName, p.initiatorSid)
+
+    local perCap = CapOf(p.adminTier and "trainfitter_max_per_admin" or "trainfitter_max_per_player")
+    TrimOwnSessionSkins(p.initiatorSid, perCap, wsid)
+
     BumpStats(wsid, p.title)
     if Audit then
         pcall(Audit, nil, "download_broadcast",
@@ -1051,18 +1130,31 @@ function Trainfitter.FinalizePending(wsid, ok, reason)
     if (not nickForMsg) or nickForMsg == "" then nickForMsg = "Server" end
 
     for _, pl in ipairs(player.GetAll()) do
+        if IsValid(initiator) and pl == initiator then continue end
         Notify(pl, string.format(
             "[Trainfitter] %s installed '%s' (%.1f MB)",
             nickForMsg, p.title or wsid, p.sizeMB or 0),
             Color(150, 220, 255))
     end
 
+    if IsValid(initiator) then
+        Notify(initiator, string.format(
+            "[Trainfitter] '%s' applied - pick it in gmod_train_spawner and press R on your train",
+            p.title or wsid),
+            Color(100, 255, 150))
+    end
+
     if p.makePersistent then
-        local old = Trainfitter.Persistent[1]
-        if old ~= wsid then
-            Trainfitter.Persistent = { wsid }
-            SavePersistent()
-            SendPersistentList()
+        local maxP = GetConVar("trainfitter_max_persistent"):GetInt()
+        if maxP <= 0 then maxP = math.huge end
+
+        local already = false
+        for _, w in ipairs(Trainfitter.Persistent) do
+            if w == wsid then already = true break end
+        end
+
+        if not already then
+            table.insert(Trainfitter.Persistent, wsid)
             ServerMount(wsid)
             if IsValid(initiator) then
                 Notify(initiator, "[Trainfitter] '" .. (p.title or wsid)
@@ -1072,15 +1164,23 @@ function Trainfitter.FinalizePending(wsid, ok, reason)
                 pcall(Audit, nil, "persistent_added",
                     wsid .. " '" .. (p.title or "") .. "'")
             end
-            if old then
-                BroadcastForget(old, p.initiatorSid or "")
-                if Audit then pcall(Audit, nil, "persistent_replaced", "forgot " .. old) end
+
+            while #Trainfitter.Persistent > maxP do
+                local dropped = table.remove(Trainfitter.Persistent, 1)
+                if dropped and dropped ~= wsid then
+                    BroadcastForget(dropped, p.initiatorSid or "")
+                    if Audit then pcall(Audit, nil, "persistent_trimmed", "forgot " .. dropped) end
+                end
             end
+
+            SavePersistent()
+            SendPersistentList()
         end
     end
 end
 
 net.Receive(NET.Request, function(len, ply)
+    if NetGlobalThrottled(ply) then return end
     if len > 128 * 8 then
         Audit(ply, "netspam_rejected", "NET.Request len=" .. len)
         return
@@ -1088,6 +1188,90 @@ net.Receive(NET.Request, function(len, ply)
     local wsid = net.ReadString()
     local persist = net.ReadBool()
     HandleRequest(ply, wsid, persist)
+end)
+
+local lastCollectionReq = {}
+local COLLECTION_COOLDOWN = 10
+
+net.Receive(NET.RequestCollection, function(len, ply)
+    if NetGlobalThrottled(ply) then return end
+    if len > 128 * 8 then
+        Audit(ply, "netspam_rejected", "NET.RequestCollection len=" .. len)
+        return
+    end
+    if not IsValid(ply) then return end
+
+    local wsid = net.ReadString()
+    if not IsValidWSID(wsid) then return end
+
+    if not Trainfitter.CanDownload(ply) then
+        Notify(ply, "[Trainfitter] Not enough perms to download, sorry kid", Color(255, 100, 100))
+        return
+    end
+
+    local csid = ply:SteamID64() or "0"
+    if lastCollectionReq[csid] and (CurTime() - lastCollectionReq[csid]) < COLLECTION_COOLDOWN then
+        Notify(ply, "[Trainfitter] Easy with the collections, wait a bit", Color(255, 180, 80))
+        return
+    end
+    lastCollectionReq[csid] = CurTime()
+
+    if Trainfitter.AllowCollections and not Trainfitter.AllowCollections() then
+        Notify(ply, "[Trainfitter] Collections are off on this server, ask an admin", Color(255, 100, 100))
+        Audit(ply, "collection_denied", wsid)
+        return
+    end
+
+    Trainfitter.FetchCollectionChildren(wsid, function(children, err)
+        if not IsValid(ply) then return end
+        if not istable(children) then
+            Notify(ply, "[Trainfitter] Not a collection: " .. tostring(err or "?"), Color(255, 100, 100))
+            return
+        end
+        if #children == 0 then
+            Notify(ply, "[Trainfitter] That collection is empty", Color(255, 100, 100))
+            return
+        end
+
+        local cap = (Trainfitter.GetMaxCollection and Trainfitter.GetMaxCollection()) or math.huge
+
+        local sid         = ply:SteamID64() or "0"
+        local isAdminTier = Trainfitter.CanMakePersistent(ply)
+        local perCap      = CapOf(isAdminTier and "trainfitter_max_per_admin" or "trainfitter_max_per_player")
+        local newBudget   = math.max(0, math.min(CapOf("trainfitter_max_loaded") - CountLoaded(), perCap - CountLoadedBy(sid)))
+
+        local toDispatch = {}
+        for _, cw in ipairs(children) do
+            if #toDispatch >= cap then break end
+            local isNew = not (Trainfitter.SessionBroadcast[cw] or Trainfitter.PendingRequest[cw])
+            if isNew then
+                if newBudget <= 0 then continue end
+                newBudget = newBudget - 1
+            end
+            toDispatch[#toDispatch + 1] = cw
+        end
+
+        local total = #toDispatch
+        if total == 0 then
+            Notify(ply, "[Trainfitter] No free slots for this collection, ask an admin", Color(255, 100, 100))
+            Audit(ply, "collection_no_slots", wsid)
+            return
+        end
+        if total < #children then
+            Notify(ply, string.format("[Trainfitter] Applying %d of %d (limits / already loaded)", total, #children),
+                Color(150, 220, 255))
+        else
+            Notify(ply, string.format("[Trainfitter] Applying collection: %d items", total), Color(150, 220, 255))
+        end
+        Audit(ply, "collection_apply", wsid .. " (" .. total .. "/" .. #children .. " items)")
+
+        for i = 1, total do
+            local cw = toDispatch[i]
+            timer.Simple((i - 1) * 0.4, function()
+                if IsValid(ply) then HandleRequest(ply, cw, false, true) end
+            end)
+        end
+    end)
 end)
 
 net.Receive(NET.RemovePersistent, function(len, ply)
@@ -1260,6 +1444,8 @@ local function PruneSessionState()
             removed = removed + 1
         end
     end
+    for sid in pairs(lastNetGlobal) do if not onlineSids[sid] then lastNetGlobal[sid] = nil; removed = removed + 1 end end
+    for sid in pairs(lastMetricsReq) do if not onlineSids[sid] then lastMetricsReq[sid] = nil; removed = removed + 1 end end
 
     local NICK_CACHE_CAP = 4096
     local nickCount = 0
@@ -1285,6 +1471,7 @@ timer.Create("Trainfitter.SessionPrune", 300, 0, PruneSessionState)
 net.Receive(NET.ReportSkins, function(len, ply)
     if len > 8 * 1024 * 8 then return end
     if not IsValid(ply) then return end
+    if NetGlobalThrottled(ply) then return end
     if not Trainfitter.CanDownload(ply) then
         Audit(ply, "report_skins_no_perm", "len=" .. len)
         return
@@ -1299,17 +1486,10 @@ net.Receive(NET.ReportSkins, function(len, ply)
     if lastReportSkins[rsKey] and (now - lastReportSkins[rsKey]) < 5 then return end
     lastReportSkins[rsKey] = now
 
-    local knownWsid =
-           Trainfitter.SessionBroadcast[wsid] ~= nil
-        or Trainfitter.MountedServer[wsid]    ~= nil
-        or Trainfitter.SkinOwnership[wsid]    ~= nil
-    if not knownWsid then
-        for _, persistentWsid in ipairs(Trainfitter.Persistent) do
-            if persistentWsid == wsid then knownWsid = true break end
-        end
-    end
-    if not knownWsid then
-        Audit(ply, "report_skins_unknown_wsid", wsid)
+    local sb = Trainfitter.SessionBroadcast[wsid]
+    local isInitiator = istable(sb) and sb.initiatorSid == sid
+    if not (isInitiator or Trainfitter.CanMakePersistent(ply)) then
+        Audit(ply, "report_skins_not_owner", wsid)
         return
     end
 
@@ -1412,38 +1592,94 @@ net.Receive(NET.RequestList, function(_, ply)
     SendPersistentList(ply)
 end)
 
+local lastResyncReq = {}
+
+net.Receive(NET.ResyncSkins, function(_, ply)
+    if not IsValid(ply) then return end
+    local sid = ply:SteamID64() or "0"
+    local now = CurTime()
+    if lastResyncReq[sid] and (now - lastResyncReq[sid]) < 5 then return end
+    lastResyncReq[sid] = now
+
+    SendPersistentList(ply)
+    SendActiveSkin(ply)
+    for wsid, info in pairs(Trainfitter.SessionBroadcast) do
+        if istable(info) then
+            net.Start(NET.Broadcast)
+            net.WriteString(wsid)
+            net.WriteString("")
+            net.WriteString(info.title or "")
+            net.WriteFloat(info.sizeMB or 0)
+            net.WriteString(info.initiatorSid or "")
+            net.Send(ply)
+        end
+    end
+end)
+
 local ADMIN_CVARS = {
     { name = "trainfitter_max_mb",               kind = "int",  min = 1, max = 8192 },
     { name = "trainfitter_require_admin",        kind = "bool" },
     { name = "trainfitter_request_cooldown",     kind = "int",  min = 0, max = 60 },
+    { name = "trainfitter_max_persistent",       kind = "int",  min = 0, max = 50 },
+    { name = "trainfitter_max_loaded",           kind = "int",  min = 0, max = 256 },
+    { name = "trainfitter_max_per_player",       kind = "int",  min = 0, max = 256 },
+    { name = "trainfitter_max_per_admin",        kind = "int",  min = 0, max = 256 },
     { name = "trainfitter_audit_log",            kind = "bool" },
     { name = "trainfitter_use_whitelist",        kind = "bool" },
     { name = "trainfitter_stats_enabled",        kind = "bool" },
     { name = "trainfitter_server_premount",      kind = "bool" },
-    --# свежие тумблеры мммм
+    { name = "trainfitter_use_http",             kind = "bool" },
     { name = "trainfitter_allow_full_lua",       kind = "bool" },
     { name = "trainfitter_max_lua_kb",           kind = "int",  min = 1, max = 1024 },
     { name = "trainfitter_sandbox_instr_m",      kind = "int",  min = 1, max = 10000 },
     { name = "trainfitter_reject_bytecode",      kind = "bool" },
+    { name = "trainfitter_allow_collections",    kind = "bool" },
+    { name = "trainfitter_max_collection",       kind = "int",  min = 0, max = 256 },
 }
 
 local function SendAdminConfig(target)
     if not IsValid(target) then return end
+    local canManage = Trainfitter.CanManage(target)
     net.Start(NET.AdminConfig)
-    net.WriteBool(Trainfitter.CanManage(target))
-    net.WriteUInt(#ADMIN_CVARS, 8)
-    for _, c in ipairs(ADMIN_CVARS) do
-        local cv = GetConVar(c.name)
-        net.WriteString(c.name)
-        net.WriteString(c.kind)
-        net.WriteString(cv and cv:GetString() or "")
+    net.WriteBool(canManage)
+    net.WriteBool(Trainfitter.CanViewLogs(target))
+    if canManage then
+        net.WriteUInt(#ADMIN_CVARS, 8)
+        for _, c in ipairs(ADMIN_CVARS) do
+            local cv = GetConVar(c.name)
+            net.WriteString(c.name)
+            net.WriteString(c.kind)
+            net.WriteString(cv and cv:GetString() or "")
+        end
+    else
+        net.WriteUInt(0, 8)
+    end
+    net.Send(target)
+end
+
+local MANAGED_LISTS = {
+    whitelist = { set = Trainfitter.Whitelist, save = SaveWhitelist },
+    blacklist = { set = Trainfitter.Blacklist, save = SaveBlacklist },
+}
+local MANAGED_ORDER = { "whitelist", "blacklist" }
+
+local function SendAdminLists(target)
+    if not IsValid(target) then return end
+    net.Start(NET.AdminListData)
+    net.WriteUInt(#MANAGED_ORDER, 8)
+    for _, name in ipairs(MANAGED_ORDER) do
+        local arr = ArrayFromSet(MANAGED_LISTS[name].set)
+        local n = math.min(#arr, 256)
+        net.WriteString(name)
+        net.WriteUInt(n, 16)
+        for i = 1, n do net.WriteString(arr[i]) end
     end
     net.Send(target)
 end
 
 net.Receive(NET.AdminGetConfig, function(_, ply)
     if not IsValid(ply) then return end
-    if not Trainfitter.CanManage(ply) then
+    if not (Trainfitter.CanManage(ply) or Trainfitter.CanViewLogs(ply)) then
         Audit(ply, "admin_get_no_perm", "")
         return
     end
@@ -1452,6 +1688,151 @@ net.Receive(NET.AdminGetConfig, function(_, ply)
     if lastAdminGet[sid] and (now - lastAdminGet[sid]) < 1 then return end
     lastAdminGet[sid] = now
     SendAdminConfig(ply)
+    if Trainfitter.CanManage(ply) then SendAdminLists(ply) end
+end)
+
+net.Receive(NET.AdminManageList, function(len, ply)
+    if len > 256 * 8 then return end
+    if not IsValid(ply) then return end
+    if not Trainfitter.CanManage(ply) then
+        Notify(ply, "[Trainfitter] No perms to manage lists", Color(255, 100, 100))
+        return
+    end
+    if NetGlobalThrottled(ply) then return end
+
+    local listName = net.ReadString()
+    local action   = net.ReadString()
+    local wsid     = net.ReadString()
+
+    local L = MANAGED_LISTS[listName]
+    if not L then return end
+    if action ~= "add" and action ~= "remove" then return end
+    if not IsValidWSID(wsid) then
+        Notify(ply, "[Trainfitter] WSID is bogus", Color(255, 100, 100))
+        return
+    end
+
+    if action == "add" then
+        L.set[wsid] = true
+    else
+        L.set[wsid] = nil
+    end
+    L.save()
+    Audit(ply, "list_" .. action, listName .. " " .. wsid)
+
+    for _, p in ipairs(player.GetAll()) do
+        if Trainfitter.CanManage(p) then SendAdminLists(p) end
+    end
+end)
+
+net.Receive(NET.GetMetrics, function(_, ply)
+    if not IsValid(ply) then return end
+    if not Trainfitter.CanManage(ply) then return end
+    local sid = ply:SteamID64() or "0"
+    local now = CurTime()
+    if lastMetricsReq[sid] and (now - lastMetricsReq[sid]) < 2 then return end
+    lastMetricsReq[sid] = now
+
+    local function cnt(t)
+        local n = 0
+        for _ in pairs(t or {}) do n = n + 1 end
+        return n
+    end
+
+    local cacheN = 0
+    if file.IsDir(GMA_CACHE_DIR, "DATA") then
+        cacheN = #(file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {})
+    end
+
+    local top = {}
+    for w, s in pairs(Trainfitter.Stats or {}) do
+        top[#top + 1] = { wsid = w, count = tonumber(s.count) or 0, title = s.title or "" }
+    end
+    table.sort(top, function(a, b) return a.count > b.count end)
+
+    local auditLines = {}
+    if file.Exists(AUDIT_FILE, "DATA") then
+        local all = string.Split(file.Read(AUDIT_FILE, "DATA") or "", "\n")
+        for i = math.max(1, #all - 8), #all do
+            if all[i] and all[i] ~= "" then auditLines[#auditLines + 1] = all[i] end
+        end
+    end
+
+    net.Start(NET.Metrics)
+    net.WriteUInt(#serverMountQueue, 16)
+    net.WriteUInt(cnt(Trainfitter.MountedServer), 16)
+    net.WriteUInt(cnt(Trainfitter.SessionBroadcast), 16)
+    net.WriteUInt(#Trainfitter.Persistent, 16)
+    net.WriteUInt(cnt(Trainfitter.Whitelist), 16)
+    net.WriteUInt(cnt(Trainfitter.Blacklist), 16)
+    net.WriteUInt(cacheN, 16)
+    net.WriteBool(ServerHasSteamworks())
+    local topN = math.min(#top, 5)
+    net.WriteUInt(topN, 8)
+    for i = 1, topN do
+        local t = top[i]
+        net.WriteString(string.sub((t.title ~= "" and t.title) or t.wsid, 1, 64))
+        net.WriteUInt(math.min(t.count, 65535), 16)
+    end
+    local aN = math.min(#auditLines, 8)
+    net.WriteUInt(aN, 8)
+    for i = 1, aN do net.WriteString(string.sub(auditLines[i], 1, 200)) end
+    net.Send(ply)
+end)
+
+local lastLogsReq    = {}
+local LOGS_MAX_PER_PAGE = 50
+
+net.Receive(NET.GetLogs, function(_, ply)
+    if not IsValid(ply) then return end
+    if not Trainfitter.CanViewLogs(ply) then return end
+    local sid = ply:SteamID64() or "0"
+    local now = CurTime()
+    if lastLogsReq[sid] and (now - lastLogsReq[sid]) < 1 then return end
+    lastLogsReq[sid] = now
+
+    local page    = net.ReadUInt(16)
+    local perPage = math.Clamp(net.ReadUInt(8), 1, LOGS_MAX_PER_PAGE)
+
+    local lines = {}
+    if file.Exists(AUDIT_FILE, "DATA") then
+        local all = string.Split(file.Read(AUDIT_FILE, "DATA") or "", "\n")
+        for i = 1, #all do
+            if all[i] and all[i] ~= "" then lines[#lines + 1] = all[i] end
+        end
+    end
+    local total = #lines
+
+    local maxPage = total > 0 and math.ceil(total / perPage) - 1 or 0
+    if page > maxPage then page = maxPage end
+
+    local hiExclusive = total - (page * perPage)
+    local loInclusive = math.max(1, hiExclusive - perPage + 1)
+    local out = {}
+    if hiExclusive >= 1 then
+        for i = hiExclusive, loInclusive, -1 do
+            local line = lines[i]
+            local stamp, lsid, rest = string.match(line, "^%[([^%]]+)%] (%S+) (.+)$")
+            if stamp and lsid then
+                local nick = (lsid == "CONSOLE") and "Console" or Trainfitter.ResolveName(lsid)
+                out[#out + 1] = { stamp = stamp, nick = nick or "?", sid = lsid, rest = rest or "" }
+            else
+                out[#out + 1] = { stamp = "", nick = "", sid = "", rest = line }
+            end
+        end
+    end
+
+    net.Start(NET.Logs)
+    net.WriteUInt(page, 16)
+    net.WriteUInt(total, 16)
+    net.WriteUInt(#out, 8)
+    for _, e in ipairs(out) do
+        net.WriteString(string.sub(e.stamp, 1, 32))
+        net.WriteString(string.sub(e.nick,  1, 48))
+        net.WriteString(string.sub(e.sid,   1, 20))
+        net.WriteString(string.sub(e.rest,  1, 200))
+    end
+    net.Send(ply)
 end)
 
 net.Receive(NET.AdminSetConVar, function(len, ply)
@@ -1709,6 +2090,10 @@ function Trainfitter.ForgetNonPersistent()
     end
     return count, removedCache
 end
+
+hook.Add("InitPostEntity", "Trainfitter.RegisterCAMI", function()
+    if Trainfitter.RegisterCAMIPrivileges then pcall(Trainfitter.RegisterCAMIPrivileges) end
+end)
 
 hook.Add("InitPostEntity", "Trainfitter.DeferredPremount", function()
     timer.Simple(2, function()

@@ -1,5 +1,5 @@
 -- Trainfitter - sh_banner.lua
--- Made by SellingVika.
+-- Made by SellingVika
 
 Trainfitter = Trainfitter or {}
 

@@ -1,5 +1,5 @@
 -- Trainfitter - cl_trainfitter_menu.lua
--- Made by SellingVika.
+-- Made by SellingVika
 
 local WORKSHOP_HOME =
     "https://steamcommunity.com/workshop/browse/?appid=4000&browsesort=trend&section=readytouseitems&requiredtags%5B%5D=Addon"
@@ -51,8 +51,8 @@ end
 local function FmtSize(bytes)
     if not bytes or bytes <= 0 then return "?" end
     local mb = bytes / (1024 * 1024)
-    if mb >= 1024 then return string.format("%.2f ГБ", mb / 1024) end
-    return string.format("%.1f МБ", mb)
+    if mb >= 1024 then return string.format("%.2f %s", mb / 1024, Trainfitter.L("unit_gb")) end
+    return string.format("%.1f %s", mb, Trainfitter.L("unit_mb"))
 end
 
 local function FmtTime(ts)
@@ -95,7 +95,7 @@ local function MakePreviewPanel(parent)
 
         local mat = self.material
         if not mat or mat:IsError() then
-            draw.SimpleText(self.loading and "Загружаю превью..." or "Нет превью",
+            draw.SimpleText(self.loading and Trainfitter.L("loading_preview") or Trainfitter.L("no_preview"),
                 "Trainfitter.Body", w / 2, h / 2,
                 C.muted, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
             return
@@ -582,12 +582,14 @@ local function BuildInstallView(parent)
 
     local persistBox = vgui.Create("DCheckBox", persistWrap)
     persistBox:SetPos(8, 8); persistBox:SetSize(18, 18)
+    persistBox:SetTooltip(Trainfitter.L("make_persistent_tip"))
 
     local persistLbl = vgui.Create("DLabel", persistWrap)
     persistLbl:SetPos(32, 4); persistLbl:SetSize(160, 26)
     persistLbl:SetFont("Trainfitter.Body")
     persistLbl:SetText(Trainfitter.L("make_persistent"))
     persistLbl:SetTextColor(C.text)
+    persistLbl:SetTooltip(Trainfitter.L("make_persistent_tip"))
     persistLbl.OnMousePressed = function() persistBox:Toggle() end
 
     local favBtn = MakeFlatButton(bottom, Trainfitter.L("add_to_favorites"), Material("icon16/star.png"))
@@ -595,10 +597,11 @@ local function BuildInstallView(parent)
     favBtn:SetEnabled(false)
 
     local confirmBtn = MakeAccentButton(bottom, Trainfitter.L("confirm"))
-    confirmBtn:Dock(RIGHT); confirmBtn:SetWide(160); confirmBtn:DockMargin(6, 6, 0, 6)
+    confirmBtn:Dock(RIGHT); confirmBtn:SetWide(190); confirmBtn:DockMargin(6, 6, 0, 6)
     confirmBtn:SetEnabled(false)
 
     local selectedWSID = nil
+    local selectedIsCollection = false
 
     local function IsWsidPersistent(wsid)
         for _, w in ipairs(Trainfitter.PersistentList or {}) do
@@ -617,6 +620,8 @@ local function BuildInstallView(parent)
 
     local function SetSelected(wsid, source)
         selectedWSID = wsid
+        selectedIsCollection = false
+        confirmBtn.label = Trainfitter.L("confirm")
         if not wsid then
             status:SetTextColor(C.muted)
             status:SetText(Trainfitter.L("paste_and_enter"))
@@ -659,6 +664,26 @@ local function BuildInstallView(parent)
                 pvImage:Clear()
             end
         end)
+
+        Trainfitter.FetchCollectionChildren(wsid, function(children, err)
+            if not IsValid(confirmBtn) or selectedWSID ~= wsid then return end
+            if not children or #children == 0 then return end
+            favBtn:SetEnabled(false)
+            persistBox:SetChecked(false); persistBox:SetEnabled(false)
+            if Trainfitter.AllowCollections and not Trainfitter.AllowCollections() then
+                selectedIsCollection = false
+                confirmBtn.label = Trainfitter.L("confirm")
+                confirmBtn:SetEnabled(false)
+                status:SetTextColor(C.err)
+                status:SetText(Trainfitter.L("collection_disabled"))
+                return
+            end
+            selectedIsCollection = true
+            confirmBtn.label = Trainfitter.L("apply_collection")
+            confirmBtn:SetEnabled(true)
+            status:SetTextColor(C.ok)
+            status:SetText(Trainfitter.L("collection_found", #children))
+        end)
     end
 
     addressEntry.OnEnter = function(s)
@@ -681,6 +706,11 @@ local function BuildInstallView(parent)
 
     confirmBtn.DoClick = function()
         if not selectedWSID then return end
+        if selectedIsCollection and Trainfitter.RequestCollection then
+            Trainfitter.RequestCollection(selectedWSID)
+            status:SetTextColor(C.ok); status:SetText(Trainfitter.L("collection_reading"))
+            return
+        end
         if Trainfitter.Request(selectedWSID, false) then
             status:SetTextColor(C.ok); status:SetText(Trainfitter.L("request_sent"))
         end
@@ -781,7 +811,9 @@ local function BuildFavoritesView(parent)
     local function Refresh()
         local q = string.lower(searchEntry:GetValue() or "")
         list:Clear()
+        local count = 0
         for _, wsid in ipairs(Trainfitter.PersistentList or {}) do
+            count = count + 1
             local info  = Trainfitter.LastMountInfo[wsid]
             local title = (info and info.title) or Trainfitter.L("not_downloaded_yet")
             local size  = info and info.size or 0
@@ -789,6 +821,9 @@ local function BuildFavoritesView(parent)
             if q == "" or string.find(hay, q, 1, true) then
                 list:AddLine(wsid, title, FmtSize(size)).wsid = wsid
             end
+        end
+        if IsValid(h) then
+            h:SetText(Trainfitter.L("favorites_title") .. " (" .. count .. ")")
         end
     end
 
@@ -958,29 +993,10 @@ local function BuildHistoryView(parent)
 
     hook.Add("Trainfitter.AddonMounted", view, Refresh)
     hook.Add("Trainfitter.HistoryUpdated", view, Refresh)
-    timer.Create("Trainfitter.HistoryRefresh." .. tostring(view), 2, 0, function()
-        if not IsValid(view) then timer.Remove("Trainfitter.HistoryRefresh." .. tostring(view)); return end
-        if view:IsVisible() then Refresh() end
-    end)
 
     Refresh()
     return view
 end
-
-local CVAR_LABELS = {
-    trainfitter_max_mb               = "Лимит размера аддона, МБ",
-    trainfitter_require_admin        = "Только админы могут качать",
-    trainfitter_request_cooldown     = "Кулдаун запроса, сек",
-    trainfitter_max_persistent       = "Макс. в избранном",
-    trainfitter_audit_log            = "Вести audit.log",
-    trainfitter_use_whitelist        = "Использовать whitelist",
-    trainfitter_stats_enabled        = "Вести статистику",
-    trainfitter_server_premount      = "Сервер сам маунтит избранное",
-    trainfitter_allow_full_lua       = "Разрешить Lua (опасно)",
-    trainfitter_max_lua_kb           = "Макс. размер одного lua-файла, КБ",
-    trainfitter_sandbox_instr_m      = "Лимит инструкций песочницы, миллионы",
-    trainfitter_reject_bytecode      = "Резать Lua-байткод (рекомендуется)",
-}
 
 local function BuildSettingsView(parent)
     local view = vgui.Create("DPanel", parent)
@@ -1014,6 +1030,66 @@ local function BuildSettingsView(parent)
         rows = {}
     end
 
+    local metricsRows = {}
+
+    local function ClearMetricsRows()
+        for _, r in ipairs(metricsRows) do if IsValid(r) then r:Remove() end end
+        metricsRows = {}
+    end
+
+    local function AddMetricLabel(text, font, col, tall, topMargin)
+        local lbl = vgui.Create("DLabel", scroll)
+        lbl:SetZPos(50)
+        lbl:Dock(TOP); lbl:SetTall(tall or 18); lbl:DockMargin(0, topMargin or 0, 0, 2)
+        lbl:SetFont(font or "Trainfitter.Small")
+        lbl:SetText(text)
+        lbl:SetTextColor(col or C.muted)
+        metricsRows[#metricsRows + 1] = lbl
+        return lbl
+    end
+
+    local function RefreshMetrics()
+        if not IsValid(scroll) then return end
+        ClearMetricsRows()
+
+        local cfg = Trainfitter.AdminConfig
+        local m   = Trainfitter.Metrics
+        if not (cfg and cfg.canManage and m) then return end
+
+        AddMetricLabel(Trainfitter.L("metrics_title"), "Trainfitter.H2", C.text, 26, 14)
+
+        AddMetricLabel(Trainfitter.L("metrics_line",
+            m.queue, m.mounted, m.broadcasts, m.persistent,
+            m.whitelist, m.blacklist, m.cache,
+            m.steamworks and Trainfitter.L("metrics_yes") or Trainfitter.L("metrics_no")),
+            "Trainfitter.Body", C.text, 20, 2)
+
+        if m.top and #m.top > 0 then
+            AddMetricLabel(Trainfitter.L("metrics_top"), "Trainfitter.Body", C.muted, 18, 6)
+            for _, t in ipairs(m.top) do
+                AddMetricLabel("  " .. t.count .. "x  " .. t.title, "Trainfitter.Small", C.text_dim, 16)
+            end
+        end
+
+        if m.audit and #m.audit > 0 then
+            AddMetricLabel(Trainfitter.L("metrics_audit"), "Trainfitter.Body", C.muted, 18, 6)
+            for _, line in ipairs(m.audit) do
+                AddMetricLabel("  " .. line, "Trainfitter.Mono", C.text_dim, 15)
+            end
+        end
+    end
+
+    local function PollRefreshMetrics()
+        if not IsValid(scroll) then return end
+        local saved = (IsValid(scroll.VBar) and scroll.VBar:GetScroll()) or 0
+        RefreshMetrics()
+        scroll:InvalidateLayout(true)
+        if IsValid(scroll.VBar) then scroll.VBar:SetScroll(saved) end
+        timer.Simple(0, function()
+            if IsValid(view) and IsValid(scroll.VBar) then scroll.VBar:SetScroll(saved) end
+        end)
+    end
+
     local function MakeRow(c)
         local row = vgui.Create("DPanel", scroll)
         row:Dock(TOP); row:SetTall(46); row:DockMargin(0, 0, 0, 6)
@@ -1025,7 +1101,10 @@ local function BuildSettingsView(parent)
         local pretty = vgui.Create("DLabel", wrap)
         pretty:Dock(TOP); pretty:SetTall(18)
         pretty:SetFont("Trainfitter.Body")
-        pretty:SetText(CVAR_LABELS[c.name] or c.name)
+        local lkey = "cvar_" .. string.gsub(c.name, "^trainfitter_", "")
+        local label = Trainfitter.L(lkey)
+        if label == lkey then label = c.name end
+        pretty:SetText(label)
         pretty:SetTextColor(C.text)
 
         local cvarLbl = vgui.Create("DLabel", wrap)
@@ -1127,44 +1206,153 @@ local function BuildSettingsView(parent)
         return list
     end
 
-    local function Rebuild(cfg)
-        ClearRows()
-
-        if not cfg or not cfg.cvars or #cfg.cvars == 0 then
-            loading:SetVisible(true)
-            loading:SetText(cfg and not cfg.canManage
-                and Trainfitter.L("settings_no_perm")
-                or  Trainfitter.L("settings_loading"))
-        else
-            loading:SetVisible(false)
-            for _, c in ipairs(cfg.cvars) do
-                rows[#rows + 1] = MakeRow(c)
-            end
-        end
-
-        local skins = CollectSkins()
+    local function AddListSection(listName, label)
+        local arr = (Trainfitter.AdminLists or {})[listName] or {}
 
         local sep = vgui.Create("DLabel", scroll)
-        sep:Dock(TOP); sep:SetTall(30); sep:DockMargin(0, 14, 0, 4)
+        sep:Dock(TOP); sep:SetTall(26); sep:DockMargin(0, 14, 0, 4)
         sep:SetFont("Trainfitter.H2")
-        sep:SetText(Trainfitter.L("active_skins", #skins))
+        sep:SetText(label .. " (" .. #arr .. ")")
         sep:SetTextColor(C.text)
         rows[#rows + 1] = sep
 
-        if #skins == 0 then
-            local empty = vgui.Create("DLabel", scroll)
-            empty:Dock(TOP); empty:SetTall(24); empty:DockMargin(0, 0, 0, 6)
-            empty:SetFont("Trainfitter.Small")
-            empty:SetText(Trainfitter.L("no_active_skins"))
-            empty:SetTextColor(C.muted)
-            rows[#rows + 1] = empty
-        else
-            for _, s in ipairs(skins) do
-                rows[#rows + 1] = MakeSkinRow(s.wsid, s.info, s.tag)
+        local addRow = vgui.Create("DPanel", scroll)
+        addRow:Dock(TOP); addRow:SetTall(32); addRow:DockMargin(0, 0, 0, 6)
+        addRow.Paint = function() end
+        local entry = MakeEntry(addRow, Trainfitter.L("address_placeholder"))
+        entry:Dock(FILL)
+        local addBtn = MakeFlatButton(addRow, Trainfitter.L("list_add"), Material("icon16/add.png"))
+        addBtn:Dock(RIGHT); addBtn:SetWide(110); addBtn:DockMargin(6, 0, 0, 0)
+        addBtn.DoClick = function()
+            local v = string.Trim(entry:GetValue() or "")
+            local w = string.match(v, "(%d+)")
+            if w and #w >= 4 then
+                Trainfitter.AdminManageList(listName, "add", w)
+                entry:SetText("")
             end
         end
+        rows[#rows + 1] = addRow
+
+        for _, wsid in ipairs(arr) do
+            local row = vgui.Create("DPanel", scroll)
+            row:Dock(TOP); row:SetTall(30); row:DockMargin(0, 0, 0, 4)
+            row.Paint = function(_, w, hh) draw.RoundedBox(6, 0, 0, w, hh, C.bg_item) end
+            local lbl = vgui.Create("DLabel", row)
+            lbl:Dock(FILL); lbl:DockMargin(12, 0, 0, 0)
+            lbl:SetFont("Trainfitter.Body")
+            local info = Trainfitter.LastMountInfo[wsid]
+            local extra = (info and info.title and info.title ~= "") and ("  -  " .. info.title) or ""
+            lbl:SetText(wsid .. extra)
+            lbl:SetTextColor(C.text)
+            local rm = MakeFlatButton(row, Trainfitter.L("remove"), Material("icon16/delete.png"))
+            rm:Dock(RIGHT); rm:SetWide(100); rm:DockMargin(4, 3, 6, 3)
+            rm.DoClick = function() Trainfitter.AdminManageList(listName, "remove", wsid) end
+            rows[#rows + 1] = row
+        end
+    end
+
+    local function AddSectionHeader(text, top)
+        local sep = vgui.Create("DLabel", scroll)
+        sep:Dock(TOP); sep:SetTall(28); sep:DockMargin(0, top or 0, 0, 6)
+        sep:SetFont("Trainfitter.H2"); sep:SetText(text); sep:SetTextColor(C.text)
+        rows[#rows + 1] = sep
+        return sep
+    end
+
+    local CLIENT_CVARS = {
+        { name = "trainfitter_skins_enabled",  kind = "bool" },
+        { name = "trainfitter_gma_scan",       kind = "bool" },
+        { name = "trainfitter_auto_subscribe", kind = "bool" },
+    }
+
+    local function MakeClientRow(c)
+        local row = vgui.Create("DPanel", scroll)
+        row:Dock(TOP); row:SetTall(46); row:DockMargin(0, 0, 0, 6)
+        row.Paint = function(_, w, hh) draw.RoundedBox(8, 0, 0, w, hh, C.bg_item) end
+
+        local wrap = vgui.Create("DPanel", row)
+        wrap:Dock(FILL); wrap:DockMargin(14, 6, 8, 6); wrap.Paint = function() end
+
+        local pretty = vgui.Create("DLabel", wrap)
+        pretty:Dock(TOP); pretty:SetTall(18); pretty:SetFont("Trainfitter.Body")
+        local lkey = "cvar_" .. string.gsub(c.name, "^trainfitter_", "")
+        local label = Trainfitter.L(lkey)
+        if label == lkey then label = c.name end
+        pretty:SetText(label); pretty:SetTextColor(C.text)
+
+        local cvarLbl = vgui.Create("DLabel", wrap)
+        cvarLbl:Dock(TOP); cvarLbl:SetTall(14); cvarLbl:SetFont("Trainfitter.Small")
+        cvarLbl:SetText(c.name); cvarLbl:SetTextColor(C.muted)
+
+        local cv = GetConVar(c.name)
+        if c.kind == "bool" then
+            local cb = vgui.Create("DCheckBox", row)
+            cb:Dock(RIGHT); cb:DockMargin(8, 14, 16, 14); cb:SetWide(18)
+            cb._suppress = true
+            cb:SetChecked(cv and cv:GetBool() or false)
+            cb._suppress = false
+            cb.OnChange = function(self, val)
+                if self._suppress then return end
+                RunConsoleCommand(c.name, val and "1" or "0")
+            end
+        else
+            local entry = MakeEntry(row)
+            entry:Dock(RIGHT); entry:DockMargin(8, 10, 14, 10); entry:SetWide(130)
+            entry:SetNumeric(true); entry:SetText(cv and cv:GetString() or "")
+            local function commit(s) RunConsoleCommand(c.name, s:GetValue() or "") end
+            entry.OnEnter = commit
+            entry.OnFocusChanged = function(s, gained) if not gained then commit(s) end end
+        end
+        return row
+    end
+
+    local function AddClientSection()
+        AddSectionHeader(Trainfitter.L("settings_client"), 0)
+        for _, c in ipairs(CLIENT_CVARS) do
+            rows[#rows + 1] = MakeClientRow(c)
+        end
+    end
+
+    local function Rebuild(cfg)
+        local savedScroll = (IsValid(scroll.VBar) and scroll.VBar:GetScroll()) or 0
+        ClearRows()
+        loading:SetVisible(false)
+
+        AddClientSection()
+
+        if cfg and cfg.canManage and cfg.cvars then
+            AddSectionHeader(Trainfitter.L("settings_server"), 18)
+            for _, c in ipairs(cfg.cvars) do
+                rows[#rows + 1] = MakeRow(c)
+            end
+
+            local skins = CollectSkins()
+            AddSectionHeader(Trainfitter.L("active_skins", #skins), 14)
+            if #skins == 0 then
+                local empty = vgui.Create("DLabel", scroll)
+                empty:Dock(TOP); empty:SetTall(24); empty:DockMargin(0, 0, 0, 6)
+                empty:SetFont("Trainfitter.Small")
+                empty:SetText(Trainfitter.L("no_active_skins"))
+                empty:SetTextColor(C.muted)
+                rows[#rows + 1] = empty
+            else
+                for _, s in ipairs(skins) do
+                    rows[#rows + 1] = MakeSkinRow(s.wsid, s.info, s.tag)
+                end
+            end
+
+            AddListSection("whitelist", Trainfitter.L("list_whitelist"))
+            AddListSection("blacklist", Trainfitter.L("list_blacklist"))
+        end
+
+        RefreshMetrics()
 
         scroll:InvalidateLayout(true)
+
+        if IsValid(scroll.VBar) then scroll.VBar:SetScroll(savedScroll) end
+        timer.Simple(0, function()
+            if IsValid(view) and IsValid(scroll.VBar) then scroll.VBar:SetScroll(savedScroll) end
+        end)
     end
 
     Rebuild(Trainfitter.AdminConfig)
@@ -1174,22 +1362,142 @@ local function BuildSettingsView(parent)
         if rebuildScheduled then return end
         rebuildScheduled = true
         timer.Simple(0.1, function()
+            if not IsValid(view) then rebuildScheduled = false return end
+            local f = vgui.GetKeyboardFocus()
+            if IsValid(f) and IsValid(scroll) and f:HasParent(scroll) then
+                timer.Simple(0.5, function()
+                    rebuildScheduled = false
+                    if IsValid(view) then ScheduleRebuild() end
+                end)
+                return
+            end
             rebuildScheduled = false
-            if not IsValid(view) then return end
             Rebuild(Trainfitter.AdminConfig)
         end)
     end
 
     hook.Add("Trainfitter.AdminConfigUpdated", view, ScheduleRebuild)
+    hook.Add("Trainfitter.AdminListsUpdated",  view, ScheduleRebuild)
+    hook.Add("Trainfitter.MetricsUpdated",     view, PollRefreshMetrics)
     hook.Add("Trainfitter.SkinForgotten",      view, ScheduleRebuild)
     hook.Add("Trainfitter.ActiveSkinChanged",  view, ScheduleRebuild)
     hook.Add("Trainfitter.PersistentUpdated",  view, ScheduleRebuild)
     hook.Add("Trainfitter.AddonMounted",       view, ScheduleRebuild)
 
+    local function PollMetrics()
+        if not IsValid(view) then return end
+        local cfg = Trainfitter.AdminConfig
+        if view:IsVisible() and cfg and cfg.canManage and Trainfitter.GetMetrics then
+            Trainfitter.GetMetrics()
+        end
+    end
+    timer.Create("Trainfitter.MetricsPoll." .. tostring(view), 5, 0, function()
+        if not IsValid(view) then
+            timer.Remove("Trainfitter.MetricsPoll." .. tostring(view))
+            return
+        end
+        PollMetrics()
+    end)
+
     view.OnShowView = function()
         if Trainfitter.AdminGetConfig then Trainfitter.AdminGetConfig() end
+        PollMetrics()
     end
 
+    return view
+end
+
+local function BuildLogsView(parent)
+    local view = vgui.Create("DPanel", parent)
+    view.Paint = function() end
+    view:DockPadding(12, 12, 12, 12)
+
+    local h = vgui.Create("DLabel", view)
+    h:Dock(TOP); h:DockMargin(0, 0, 0, 8)
+    h:SetFont("Trainfitter.H1"); h:SetText(Trainfitter.L("logs_title")); h:SetTextColor(C.text); h:SetTall(28)
+
+    local top = vgui.Create("DPanel", view)
+    top:Dock(TOP); top:SetTall(32); top:DockMargin(0, 0, 0, 8); top.Paint = function() end
+
+    local filter = MakeEntry(top, Trainfitter.L("logs_filter"))
+    filter:Dock(FILL)
+
+    local refreshBtn = MakeFlatButton(top, Trainfitter.L("refresh"), Material("icon16/arrow_refresh.png"))
+    refreshBtn:Dock(RIGHT); refreshBtn:SetWide(130); refreshBtn:DockMargin(8, 0, 0, 0)
+
+    local scroll = vgui.Create("DScrollPanel", view)
+    scroll:Dock(FILL)
+
+    local loadMore = MakeFlatButton(view, Trainfitter.L("logs_load_more"))
+    loadMore:Dock(BOTTOM); loadMore:SetTall(32); loadMore:DockMargin(0, 8, 0, 0)
+
+    local page, perPage, total = 0, 30, 0
+    local entries = {}
+
+    local function passFilter(e, q)
+        if q == "" then return true end
+        local hay = string.lower((e.nick or "") .. " " .. (e.sid or "") .. " " .. (e.rest or "") .. " " .. (e.stamp or ""))
+        return string.find(hay, q, 1, true) ~= nil
+    end
+
+    local function Render()
+        scroll:Clear()
+        local q = string.lower(string.Trim(filter:GetValue() or ""))
+        local shown = 0
+        for _, e in ipairs(entries) do
+            if passFilter(e, q) then
+                shown = shown + 1
+                local head = vgui.Create("DLabel", scroll)
+                head:Dock(TOP); head:SetTall(16)
+                head:SetFont("Trainfitter.Small")
+                local who = (e.nick ~= "" and e.nick) or "?"
+                if e.sid ~= "" and e.sid ~= "0" then who = who .. "  [" .. e.sid .. "]" end
+                head:SetText((e.stamp ~= "" and (e.stamp .. "   ") or "") .. who)
+                head:SetTextColor(C.accent)
+
+                local body = vgui.Create("DLabel", scroll)
+                body:Dock(TOP); body:DockMargin(0, 0, 0, 8)
+                body:SetFont("Trainfitter.Small")
+                body:SetWrap(true); body:SetAutoStretchVertical(true)
+                body:SetText(e.rest ~= "" and e.rest or "-")
+                body:SetTextColor(C.text_dim)
+            end
+        end
+        if shown == 0 then
+            local empty = vgui.Create("DLabel", scroll)
+            empty:Dock(TOP); empty:SetTall(24)
+            empty:SetFont("Trainfitter.Small")
+            empty:SetText(Trainfitter.L("logs_empty"))
+            empty:SetTextColor(C.muted)
+        end
+        loadMore:SetVisible((page + 1) * perPage < total)
+    end
+
+    local function Fetch(reset)
+        if reset then page = 0; entries = {} end
+        if Trainfitter.GetLogs then Trainfitter.GetLogs(page, perPage) end
+    end
+
+    refreshBtn.DoClick   = function() Fetch(true) end
+    loadMore.DoClick     = function() page = page + 1; Fetch(false) end
+    filter.OnValueChange = function()
+        timer.Create("Trainfitter.LogsFilter." .. tostring(view), 0.2, 1, function()
+            if IsValid(view) then Render() end
+        end)
+    end
+
+    hook.Add("Trainfitter.LogsUpdated", view, function()
+        if not IsValid(view) then return end
+        local data = Trainfitter.LogsData
+        if not istable(data) then return end
+        total = data.total or 0
+        if (data.page or 0) == 0 then entries = {} end
+        for _, e in ipairs(data.entries or {}) do entries[#entries + 1] = e end
+        page = data.page or 0
+        Render()
+    end)
+
+    view.OnShowView = function() Fetch(true) end
     return view
 end
 
@@ -1371,6 +1679,7 @@ function Trainfitter.OpenMenu()
     views.favorites = BuildFavoritesView(content); views.favorites:Dock(FILL); views.favorites:SetVisible(false)
     views.history   = BuildHistoryView(content);   views.history:Dock(FILL);   views.history:SetVisible(false)
     views.settings  = BuildSettingsView(content);  views.settings:Dock(FILL);  views.settings:SetVisible(false)
+    views.logs      = BuildLogsView(content);      views.logs:Dock(FILL);      views.logs:SetVisible(false)
 
     local function AddNav(name, label, iconPath)
         local item = MakeNavItem(nav, label, iconPath, name == "install")
@@ -1384,8 +1693,10 @@ function Trainfitter.OpenMenu()
     AddNav("favorites", Trainfitter.L("nav_favorites"), "icon16/star.png")
     AddNav("history",   Trainfitter.L("nav_history"),   "icon16/clock.png")
 
-    local settingsItem = AddNav("settings", Trainfitter.L("nav_settings"), "icon16/cog.png")
-    settingsItem:SetVisible(false)
+    AddNav("settings", Trainfitter.L("nav_settings"), "icon16/cog.png")
+
+    local logsItem = AddNav("logs", Trainfitter.L("nav_logs"), "icon16/book.png")
+    logsItem:SetVisible(false)
 
     if views.settings then
         views.settings.Reopen = function()
@@ -1397,9 +1708,8 @@ function Trainfitter.OpenMenu()
     end
 
     local function RefreshAdminVis()
-        if not IsValid(settingsItem) then return end
         local cfg = Trainfitter.AdminConfig
-        settingsItem:SetVisible(cfg and cfg.canManage == true)
+        if IsValid(logsItem) then logsItem:SetVisible(cfg and cfg.canViewLogs == true) end
     end
     RefreshAdminVis()
     hook.Add("Trainfitter.AdminConfigUpdated", frame, RefreshAdminVis)

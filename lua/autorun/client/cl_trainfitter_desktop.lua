@@ -1,5 +1,5 @@
 -- Trainfitter - cl_trainfitter_desktop.lua
--- Made by SellingVika.
+-- Made by SellingVika
 
 local ICON = "icon64/trainfitter.png"
 
