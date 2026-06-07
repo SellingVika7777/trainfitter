@@ -1,10 +1,8 @@
---# Trainfitter - sh_gma_scan.lua
---# Made by SellingVika
---# вся защита от мудаков живёт тут разбор GMA руками валидация песочница никаких net file.Write ents.Create внутри песочницы попадос кто-то хочет насрать через скин пусть пробьёт всё подряд удачи
+-- Trainfitter - sh_gma_scan.lua
+-- Made by SellingVika
 
 Trainfitter = Trainfitter or {}
 
---# сюда класть нельзя ничего вообще нашёл что-то из списка в GMA - аддон в топку без обсуждения никаких lua/entities lua/weapons gamemodes bin data и всё такое
 local DANGEROUS_PREFIXES = {
     "lua/includes/",
     "lua/menu/",
@@ -27,7 +25,6 @@ local DANGEROUS_PREFIXES = {
     "scripts/weapons/",
 }
 
---# обычный контент текстурки модельки звуки всё это ок пускаем без вопросов
 local DATA_PREFIXES = {
     "materials/",
     "models/",
@@ -36,12 +33,10 @@ local DATA_PREFIXES = {
     "scripts/",
 }
 
---# куда вообще можно lua класть в safe-режиме ТОЛЬКО скины маски autorun пульты переехали в full-режим (см ниже) потому что они содержат настоящий код а не данные
 local LUA_ALLOWED_PREFIXES = {
     "lua/metrostroi/skins/",
 }
 
---# дополнительные lua-пути только в full-режиме тут живут маски пульты custom SENT кастомные effects-ы и прочее тяжёлое выполняются БЕЗ песочницы потому что SENT в песочнице не живёт masks/ первым чтоб классификация isMaskLua сработала
 local LUA_ALLOWED_PREFIXES_FULL = {
     "lua/metrostroi/masks/",
     "lua/metrostroi/",
@@ -51,14 +46,12 @@ local LUA_ALLOWED_PREFIXES_FULL = {
     "lua/effects/",
 }
 
---# префиксы которые в safe считаются опасными а в full ок используется в is_dangerous_path чтоб разные пользователи могли решать разные сценарии
 local FULL_MODE_EXEMPT = {
     ["lua/weapons/"]  = true,
     ["lua/effects/"]  = true,
     ["lua/entities/"] = true,
 }
 
---# мета-файлы которые ок видеть в корне аддона типа README addon.json и прочая бюрократия
 local ALLOWED_EXACT = {
     ["addon.json"]    = true,
     ["addon.txt"]     = true,
@@ -74,7 +67,6 @@ local ALLOWED_EXACT = {
     ["changelog.txt"] = true,
 }
 
---# расширения которые мы вообще согласны увидеть чужие .exe .dll .bat .so .py - соси не пускаем
 local ALLOWED_EXTS = {
     lua = true,
     vmt = true, vtf = true, png = true, jpg = true, jpeg = true,
@@ -85,15 +77,27 @@ local ALLOWED_EXTS = {
     pcf = true,
 }
 
---# жёсткие лимиты которые конварами НЕ настраиваются нахрена они тогда лимиты если их каждый сможет крутануть
+--# исполняемые/бинарники - это уже не аддон а доставка малвари, режем даже в full-режиме
+local DANGEROUS_EXTS = {
+    exe = true, dll = true, so = true, dylib = true, elf = true,
+    bat = true, cmd = true, com = true, scr = true, msi = true,
+    vbs = true, vbe = true, js = true, jse = true, wsf = true, wsh = true,
+    ps1 = true, psm1 = true, sh = true, bash = true,
+    jar = true, py = true, pyc = true, pyo = true, rb = true, php = true,
+    pl = true, app = true, deb = true, rpm = true, run = true, bin = true,
+}
+
 local MAX_FILE_SIZE          = 256  * 1024 * 1024
 local MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024
 local MAX_TOTAL_FILES        = 4096
 local MAX_LUA_FILES          = 256
 local MAX_TOTAL_LUA_BYTES    = 4 * 1024 * 1024
 
---# мягкий лимит на размер одного addon-lua файла берётся из конвара trainfitter_max_lua_kb (дефолт 64 кб) если у кого-то скин жирнее пусть админ поднимет clamped 1-1024 кб чтобы дебилы не прописали 999999 и не словили OOM
 function Trainfitter.GetMaxLuaSize()
+    --# в full-режиме per-file КБ-лимит не душим, остаётся только жёсткий общий потолок lua
+    if Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() then
+        return MAX_TOTAL_LUA_BYTES
+    end
     local cv = GetConVar("trainfitter_max_lua_kb")
     local kb = cv and cv:GetInt() or 64
     if kb < 1    then kb = 1    end
@@ -101,7 +105,6 @@ function Trainfitter.GetMaxLuaSize()
     return kb * 1024
 end
 
---# лимит инструкций для песочницы в миллионах из конвара trainfitter_sandbox_instr_m (дефолт 100) бесконечные циклы маски умирают пока не достигнут clamped 1-10000 миллионов
 function Trainfitter.GetSandboxInstrLimit()
     local cv = GetConVar("trainfitter_sandbox_instr_m")
     local m = cv and cv:GetInt() or 100
@@ -110,13 +113,11 @@ function Trainfitter.GetSandboxInstrLimit()
     return m * 1000000
 end
 
---# режем ли мы lua-bytecode дефолт да (безопасно) можно отключить через trainfitter_reject_bytecode 0 если ты ОЧЕНЬ доверяешь источникам и тебе зачем-то нужен прекомпил
 function Trainfitter.ShouldRejectBytecode()
     local cv = GetConVar("trainfitter_reject_bytecode")
     return cv == nil or cv:GetBool() ~= false
 end
 
---# базовая проверка тела lua перед компиляцией не пустой не огромный без NUL-байтов в начале (NUL обычно намекает что это бинарь а не код)
 local function PreflightCheck(content, displayPath)
     if not isstring(content) or #content == 0 then
         return false, "empty lua file: " .. tostring(displayPath)
@@ -135,7 +136,6 @@ local function PreflightCheck(content, displayPath)
     return true
 end
 
---# скины и маски валидируются одинаково но оставляю две функции мало ли захочется развести правила дешевле менять одну функцию
 function Trainfitter.ValidateSkinLua(content, displayPath)
     return PreflightCheck(content, displayPath)
 end
@@ -144,7 +144,6 @@ function Trainfitter.ValidateMaskLua(content, displayPath)
     return PreflightCheck(content, displayPath)
 end
 
---# поверхностная копия таблицы нужна чтоб песочница получила свою table string math bit мутирует у себя пофиг в глобал ничего не утекает
 local function ShallowCopy(t)
     if not istable(t) then return t end
     local r = {}
@@ -152,7 +151,6 @@ local function ShallowCopy(t)
     return r
 end
 
---# string без dump потому что string.dump умеет дампить байткод через него можно вытащить внутренности замыкания в песочнице этот атракцион не нужен ну нахер
 local function SafeStringLib()
     local s = ShallowCopy(string)
     s.dump = nil
@@ -160,7 +158,6 @@ local function SafeStringLib()
 end
 
 
---# whitelist методов entity которые отдаём наружу через прокси только read-only геттеры никаких Remove/SetPos/ConCommand/SendLua кто попытается ent:DoBadThing() из песочницы получит nil и errror
 local SAFE_ENT_METHODS = {
     "IsValid", "EntIndex", "GetClass", "GetModel",
     "GetPos", "GetAngles", "GetForward", "GetRight", "GetUp",
@@ -174,11 +171,9 @@ local SAFE_ENT_METHODS = {
     "EyePos", "EyeAngles",
 }
 
---# заворачиваем настоящую entity в безобидную табличку с whitelist-методами маска получает прокси и колон-вызов чего-нибудь весёлого типа ent:Kick() ловит nil потому что Kick в whitelist нет no vlom hack побег через __index закрыт намертво
 local function MakeEntProxy(ent)
     if not isentity(ent) then return ent end
     if not IsValid(ent) then
-        --# невалидная entity тоже должна как-то отвечать иначе чужой код упадёт на простой проверке IsValid
         return {
             IsValid  = function() return false end,
             EntIndex = function() return 0 end,
@@ -188,14 +183,12 @@ local function MakeEntProxy(ent)
     for _, name in ipairs(SAFE_ENT_METHODS) do
         local fn = ent[name]
         if isfunction(fn) then
-            --# замыкаем настоящую entity в closure снаружи её не достать никак чисто кошмарик
             p[name] = function(_, ...) return fn(ent, ...) end
         end
     end
     return p
 end
 
---# пачка entity - пачка прокси тривиально
 local function ProxyList(list)
     if not istable(list) then return {} end
     local out = {}
@@ -206,7 +199,6 @@ local function ProxyList(list)
     return out
 end
 
---# если среди args есть entity заменяем на прокси нужно для хук-коллбэков движок зовёт hook с настоящими entity мы их перехватываем ещё ДО того как они доедут до кода маски
 local function ProxyArgs(...)
     local n = select("#", ...)
     if n == 0 then return end
@@ -217,13 +209,11 @@ local function ProxyArgs(...)
     return unpack(args, 1, n)
 end
 
---# обёртка над коллбэком проксирует args перед вызовом
 local function ProxyCallback(fn)
     if not isfunction(fn) then return fn end
     return function(...) return fn(ProxyArgs(...)) end
 end
 
---# поверхностная копия таблицы где все функции заменены на ProxyCallback юзается для масок чтоб их Render/Think получали проксированные args
 local function ProxyTableFunctions(t)
     if not istable(t) then return t end
     local r = {}
@@ -233,11 +223,9 @@ local function ProxyTableFunctions(t)
     return r
 end
 
---# что из Metrostroi отдать в песочницу скины - чистая дата идут как есть проксировать там нечего маски у них Render(train)/Think(train) которые движок зовёт с реальной entity значит args надо проксировать на входе
 local function MakeMetrostroiView()
     if not istable(Metrostroi) then return {} end
 
-    --# Viktoooor обёртка для масочных регистраторов заворачивает переданную таблицу так чтоб её функции получали прокси-args
     local function Viktoooor(fn)
         if not isfunction(fn) then return nil end
         return function(c, t)
@@ -245,7 +233,6 @@ local function MakeMetrostroiView()
         end
     end
 
-    --# OkDa тут вообще не паримся тупо пускаем как есть скинам обёртка нахуй не нужна только мешает регистрации в меню
     local function OkDa(fn)
         if not isfunction(fn) then return nil end
         return function(...) return fn(...) end
@@ -262,7 +249,6 @@ local function MakeMetrostroiView()
     }
 end
 
---# хуки с неймспейсом чтобы маска Vasya не могла снять хук маски Petya или какой-нибудь системный префикс уникален на каждый запуск ExecSandboxed
 local function MakeNamespacedHook(prefix)
     local function ns(id) return prefix .. "::" .. tostring(id) end
     return {
@@ -274,11 +260,9 @@ local function MakeNamespacedHook(prefix)
             if not isstring(name) then return end
             return hook.Remove(name, ns(id))
         end,
-        --# hook.Run/Call/GetTable намеренно НЕ даны из них можно стрельнуть в любой системный хук с любыми аргументами типа hook.Run("PlayerSay", admin, "/give me all") нет спасибо
     }
 end
 
---# таймеры с тем же неймспейсом чтоб не конфликтовать по именам разные маски не пересекаются
 local function MakeNamespacedTimer(prefix)
     local function ns(name) return prefix .. "::" .. tostring(name) end
     return {
@@ -297,14 +281,12 @@ local function MakeNamespacedTimer(prefix)
     }
 end
 
---# уникальный префикс из пути файла для namespace хуков/таймеров всё кроме безопасных символов в подчёркивание потому что не доверяю
 local function MakePathPrefix(path)
     local s = tostring(path or "anon")
     s = string.gsub(s, "[^%w_/.%-]", "_")
     return "trainfitter_sb:" .. s
 end
 
---# Material с защитой от path traversal никаких .. : абсолютных путей иначе можно вытащить произвольный материал с диска через хитрожопый Material с /etc или похожее
 local function SafeMaterial(path, params)
     if not isstring(path) then return nil end
     if string.find(path, "..", 1, true)  then return nil end
@@ -314,23 +296,19 @@ local function SafeMaterial(path, params)
     return Material(path, params)
 end
 
---# песочница СКИНА минимум API только то что нужно чтоб зарегать данные net/file/http/ents/player/hook/timer не пускаем это для масок
 local function BuildSkinSandbox()
     local sb = {
         Metrostroi = MakeMetrostroiView(),
 
-        --# конструкторы базовых типов безопасно просто создают объекты
         Color  = Color,
         Vector = Vector,
         Angle  = Angle,
 
-        --# stdlib с изолированными копиями мутации остаются у скина string без dump чтоб байткод не утёк
         table  = ShallowCopy(table),
         string = SafeStringLib(),
         math   = ShallowCopy(math),
         bit    = ShallowCopy(bit),
 
-        --# проверки типов вреда никакого
         IsValid    = IsValid,
         isnumber   = isnumber,
         isstring   = isstring,
@@ -362,22 +340,20 @@ local function BuildSkinSandbox()
         SERVER = SERVER,
         CLIENT = CLIENT,
 
-        Material     = SafeMaterial,    --# обёрнутый не голый чтоб через .. не вылезли
-        AddCSLuaFile = function() end,  --# маске нечего синкать клиенту
-        print        = function() end,  --# молчим нечего консоль засирать
+        Material     = SafeMaterial,
+        AddCSLuaFile = function() end,
+        print        = function() end,
     }
     sb._G = sb
     return sb
 end
 
---# песочница МАСКИ то же что у скина плюс entity-API через прокси плюс хуки/таймеры с неймспейсом плюс print маски это поведение скины это просто данные разница принципиальная
 local function BuildMaskSandbox(prefix)
     local sb = BuildSkinSandbox()
 
     sb.hook  = MakeNamespacedHook(prefix)
     sb.timer = MakeNamespacedTimer(prefix)
 
-    --# FindMetaTable историческая дыра уровня "взял весь мета-стол - дёргай любой метод" оставляем РОВНО одну функцию из Entity-меты GetClass и больше нихуя хочется других методов иди через прокси там есть whitelist
     sb.FindMetaTable = function(name)
         if name ~= "Entity" then return nil end
         local mt = FindMetaTable("Entity")
@@ -385,10 +361,8 @@ local function BuildMaskSandbox(prefix)
         return { GetClass = mt.GetClass }
     end
 
-    --# Entity(idx) отдаём прокси а не настоящую entity
     sb.Entity = function(idx) return MakeEntProxy(Entity(idx)) end
 
-    --# ents всё через прокси никаких настоящих entity наружу
     sb.ents = {
         FindByClass  = function(c)    return ProxyList(ents.FindByClass(c)) end,
         FindInSphere = function(p, r) return ProxyList(ents.FindInSphere(p, r)) end,
@@ -398,7 +372,6 @@ local function BuildMaskSandbox(prefix)
         GetCount     = ents.GetCount,
     }
 
-    --# player то же самое иначе самое смешное было бы дать настоящий Player тогда :ConCommand("rcon ...") / :Kick() / :SendLua("ply.Health=0") в одну строку мдааа нет
     sb.player = {
         GetAll         = function()  return ProxyList(player.GetAll()) end,
         GetHumans      = function()  return ProxyList(player.GetHumans()) end,
@@ -409,7 +382,6 @@ local function BuildMaskSandbox(prefix)
         GetCount       = player.GetCount,
     }
 
-    --# принтеры пусть пишут в консоль безвредно админ хоть видит логи маски
     sb.print      = print
     sb.MsgC       = MsgC
     sb.Msg        = Msg
@@ -420,13 +392,11 @@ local function BuildMaskSandbox(prefix)
     return sb
 end
 
---# главный вход скомпилировать lua-строку и запустить в нашей песочнице kind определяет какую (skin / mask)
 function Trainfitter.ExecSandboxed(content, path, kind)
     if not isstring(content) or #content == 0 then
         return false, "empty content"
     end
 
-    --# lua-байткод всегда начинается с \27 (ESC) текстовый исходник никогда байткод опасен потому что обходит парсер и любую защиту через regex по дефолту режем но админ может разрешить через trainfitter_reject_bytecode 0 если очень хочется
     if Trainfitter.ShouldRejectBytecode() and string.byte(content, 1) == 0x1B then
         return false, "lua bytecode rejected (set trainfitter_reject_bytecode 0 to allow)"
     end
@@ -435,7 +405,6 @@ function Trainfitter.ExecSandboxed(content, path, kind)
     if isstring(fn) then return false, "compile: " .. fn end
     if not isfunction(fn) then return false, "compile returned non-function" end
 
-    --# если setfenv почему-то отсутствует ОТКАЗ без него мы не подменим env и код выполнится в глобальном _G это fail-open такое разрешать нельзя
     if not isfunction(setfenv) then
         return false, "setfenv unavailable - refusing to execute without sandbox"
     end
@@ -445,7 +414,6 @@ function Trainfitter.ExecSandboxed(content, path, kind)
     local setOk, setErr = pcall(setfenv, fn, sb)
     if not setOk then return false, "setfenv failed: " .. tostring(setErr) end
 
-    --# hook на счётчик инструкций после лимита (по дефолту 100M, настраивается trainfitter_sandbox_instr_m) кидает error pcall его ловит while true do end умирает за пару сек
     local hookSet = false
     if debug and isfunction(debug.sethook) then
         local limit = Trainfitter.GetSandboxInstrLimit()
@@ -455,18 +423,13 @@ function Trainfitter.ExecSandboxed(content, path, kind)
 
     local ok, runErr = pcall(fn)
 
-    --# снять hook ОБЯЗАТЕЛЬНО иначе он висит на main thread и убьёт первое что попадётся а это будет какой-нибудь невинный кусок движка лол
     if hookSet then debug.sethook() end
 
     if not ok then return false, "runtime: " .. tostring(runErr) end
     return true
 end
 
---# ============================================================================
---# GMA-парсер вскрываем .gma бинарник руками не через file.Read("...","GAME") на каждый lua-файл отдельно потому что file.Read может быть перехвачен каким-нибудь анти-чит-хуком на file.Open (привет lenofag/sv_vzlom.lua) и подсунуть мусор качаем напрямую из бинарника и кешируем тела на потом
---# ============================================================================
 
---# чтение C-строки (zero-terminated) сначала пробуем штатный ReadString если не вышло побайтово до \0 или лимита
 local function read_cstr(f, maxlen)
     if not f then return "" end
     maxlen = maxlen or 128
@@ -484,7 +447,6 @@ local function read_cstr(f, maxlen)
     return table.concat(out)
 end
 
---# little-endian u32 - number lua в u32-битопы нативно не умеет поэтому собираем умножением
 local function read_u32(f)
     local b = f:Read(4)
     if not b or #b < 4 then return 0 end
@@ -494,7 +456,6 @@ local function read_u32(f)
          + string.byte(b, 4) * 0x1000000
 end
 
---# u64 - double до 2^53 точно дальше лоси но файлы такого размера всё равно отвергаем по MAX_FILE_SIZE так что похуй
 local function read_u64_as_num(f)
     local b = f:Read(8)
     if not b or #b < 8 then return 0 end
@@ -509,17 +470,14 @@ local function read_u64_as_num(f)
     return lo + hi * 2^32
 end
 
---# это не наш путь чек если что-то из DANGEROUS_PREFIXES - возвращаем сам префикс для лога плюс path traversal .. \0 : лидирующие слеши нахер в full-режиме часть префиксов (lua/entities lua/weapons lua/effects) становится разрешённой потому что пульты и SENT там живут
 local function is_dangerous_path(p, fullLua)
-    for _, pref in ipairs(DANGEROUS_PREFIXES) do
-        if string.sub(p, 1, #pref) == pref then
-            if fullLua and FULL_MODE_EXEMPT[pref] then
-                --# в full-режиме это ок пропускаем дальше
-            else
-                return pref
-            end
+    --# в safe-режиме режем опасные папки, в full админ доверяет источнику - не наша забота
+    if not fullLua then
+        for _, pref in ipairs(DANGEROUS_PREFIXES) do
+            if string.sub(p, 1, #pref) == pref then return pref end
         end
     end
+    --# а это всегда: выход за пределы папки аддона = чистая атака, не фича
     if string.find(p, "..", 1, true)   then return ".." end
     if string.find(p, "\0",   1, true) then return "\\0" end
     if string.find(p, ":",    1, true) then return ":"  end
@@ -528,7 +486,6 @@ local function is_dangerous_path(p, fullLua)
     return nil
 end
 
---# это lua и при этом в разрешённой папке если да возвращаем какой именно префикс совпал для классификации потом в full-режиме добавляются LUA_ALLOWED_PREFIXES_FULL (metrostroi/ entities/ etc)
 local function is_lua_addon_path(p, fullLua)
     for _, pref in ipairs(LUA_ALLOWED_PREFIXES) do
         if string.sub(p, 1, #pref) == pref then return pref end
@@ -537,11 +494,12 @@ local function is_lua_addon_path(p, fullLua)
         for _, pref in ipairs(LUA_ALLOWED_PREFIXES_FULL) do
             if string.sub(p, 1, #pref) == pref then return pref end
         end
+        --# full-режим: любой lua считается addon-lua и гоняется несандбоксенно (это и есть full lua)
+        return "lua/"
     end
     return nil
 end
 
---# путь вообще разрешён для lua только LUA_ALLOWED_PREFIXES (+ FULL если включено) для остального материалы/модели/звуки либо exact-match по ALLOWED_EXACT (типа readme.md в корне)
 local function is_allowed_path(p, is_lua, fullLua)
     if ALLOWED_EXACT[p] then return true end
 
@@ -549,45 +507,46 @@ local function is_allowed_path(p, is_lua, fullLua)
         return is_lua_addon_path(p, fullLua) ~= nil
     end
 
+    --# full-режим: любой не-lua путь ок, выходы за пределы уже отсеяны выше
+    if fullLua then return true end
+
     for _, pref in ipairs(DATA_PREFIXES) do
         if string.sub(p, 1, #pref) == pref then return true end
     end
     return false
 end
 
---# расширение файла без точки пусто если расширения нет вообще
 local function get_ext(p)
     local dot = string.find(p, "%.[^%./]+$")
     if not dot then return "" end
     return string.sub(p, dot + 1)
 end
 
---# ScanGMA главная проверка перед маунтом парсит .gma руками бежит по индексу валидирует пути/расширения/размеры читает тела lua-файлов и тоже их валидирует всё прошло - отдаёт список файлов плюс словарь lua-тел чтоб потом не перечитывать через возможно-захуканный file.Read
-function Trainfitter.ScanGMA(gmapath)
+function Trainfitter.ScanGMA(gmapath, fullLuaOverride)
     if not isstring(gmapath) or gmapath == "" then
         return false, "no path", nil
     end
 
-    --# в full-lua режиме пускаем больше путей и потом исполняем их без песочницы решение принимаем один раз на старте скана чтоб не менялось в процессе
-    local fullLua = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+    local fullLua
+    if fullLuaOverride ~= nil then
+        fullLua = fullLuaOverride == true
+    else
+        fullLua = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
+    end
 
-    --# снимаем лимит на размер lua один раз тоже чтоб не плавал в процессе скана
     local maxLuaSize = Trainfitter.GetMaxLuaSize()
 
     local f = file.Open(gmapath, "rb", "GAME")
     if not f then
-        --# на каких-то путях file.Open отдаёт nil (например ugc handle) это не ошибка GMA просто скан невозможен помечаем как пропустили
         return true, "ugc handle (skipped)", nil
     end
 
-    --# магия GMA "GMAD" в начале нет магии не наш клиент
     local magic = f:Read(4)
     if magic ~= "GMAD" then
         f:Close()
         return false, "not a gma (magic=" .. tostring(magic) .. ")", nil
     end
 
-    --# версия до 3 знаем всё что выше пожалуйста не лезь мало ли
     local version = f:Read(1)
     version = version and string.byte(version) or 0
     if version > 3 then
@@ -595,10 +554,8 @@ function Trainfitter.ScanGMA(gmapath)
         return false, "unsupported gma version " .. version, nil
     end
 
-    --# SteamID u64 + timestamp u64 пропускаем нам неинтересно
     f:Read(8); f:Read(8)
 
-    --# в v2+ тут список required-аддонов (c-строки до пустой) скипаем все нам они не нужны
     if version >= 2 then
         for _ = 1, 1024 do
             local s = read_cstr(f, 128)
@@ -606,19 +563,16 @@ function Trainfitter.ScanGMA(gmapath)
         end
     end
 
-    --# имя/описание/автор тоже скипаем
     read_cstr(f, 512)
     read_cstr(f, 4096)
     read_cstr(f, 256)
 
-    --# addon version скипаем
     f:Read(4)
 
-    --# дальше идёт индекс файлов {u32 filenum, cstr name, u64 size, u32 crc} заканчивается когда filenum == 0
 
     local files            = {}
     local entries          = {}
-    local luaBodies        = {} --# сюда складываем тела .lua чтоб не перечитывать потом
+    local luaBodies        = {}
     local skinFileCount    = 0
     local maskFileCount    = 0
     local materialsCount   = 0
@@ -637,7 +591,7 @@ function Trainfitter.ScanGMA(gmapath)
 
         local name = read_cstr(f, 512)
         local size = read_u64_as_num(f)
-        f:Read(4) --# crc не проверяем gmod сам это делает на маунте
+        f:Read(4)
 
         if not name or name == "" then
             f:Close()
@@ -661,7 +615,6 @@ function Trainfitter.ScanGMA(gmapath)
 
         local lower = string.lower(name)
 
-        --# путь подозрительный сразу нахер весь GMA если safe-режим и путь был бы ок в full-режиме подсказываем какой конвар включить
         local danger = is_dangerous_path(lower, fullLua)
         if danger then
             f:Close()
@@ -674,23 +627,28 @@ function Trainfitter.ScanGMA(gmapath)
                 files
         end
 
-        --# расширение в whitelist нет пиздуй отсюда
         local ext = string.lower(get_ext(lower))
-        if ext == "" or not ALLOWED_EXTS[ext] then
+        local badExt
+        if fullLua then
+            --# full: пускаем всё кроме исполняемых/бинарников
+            badExt = (ext == "" and not ALLOWED_EXACT[lower]) or DANGEROUS_EXTS[ext]
+        else
+            --# safe: строгий whitelist типов
+            badExt = ext == "" or not ALLOWED_EXTS[ext]
+        end
+        if badExt then
             f:Close()
             return false,
                 "disallowed file type: '" .. name .. "' (." .. ext .. ")",
                 files
         end
 
-        --# классификация lua / addon-lua / mask-lua / autorun-lua
         local isLua       = (ext == "lua")
         local addonPref   = isLua and is_lua_addon_path(lower, fullLua) or nil
         local isAddonLua  = addonPref ~= nil
         local isMaskLua   = addonPref == "lua/metrostroi/masks/"
         local isAutorunLua = addonPref == "lua/autorun/"
 
-        --# не-lua и не в разрешённой data-папке отказ
         if not isLua and not is_allowed_path(lower, false, fullLua) then
             f:Close()
             return false,
@@ -699,7 +657,6 @@ function Trainfitter.ScanGMA(gmapath)
                 files
         end
 
-        --# lua в неразрешённом пути в safe-режиме это обычно значит "аддон содержит маски/пульты" даём явную подсказку какой конвар включить чтоб это поставить
         if isLua and not isAddonLua then
             f:Close()
             local hint = ""
@@ -729,8 +686,7 @@ function Trainfitter.ScanGMA(gmapath)
                     "too many lua files in addon (>" .. MAX_LUA_FILES .. ")",
                     files
             end
-            --# tight cap на размер addon-lua настраивается конваром (дефолт 64 КБ)
-            if isAddonLua and size > maxLuaSize then
+            if not fullLua and isAddonLua and size > maxLuaSize then
                 f:Close()
                 return false, string.format(
                     "addon lua file too large: %s (%d B, max %d B - raise trainfitter_max_lua_kb if you trust the source)",
@@ -738,7 +694,6 @@ function Trainfitter.ScanGMA(gmapath)
             end
         end
 
-        --# считаем счётчики чтоб потом проверить "это вообще metrostroi-аддон или нет" в full-режиме autorun lua тоже считаем как контент иначе чистые пульты с инитом только в lua/autorun/server/ не прошли бы marker-проверку
         if isMaskLua then
             maskFileCount = maskFileCount + 1
         elseif isAddonLua and not isAutorunLua then
@@ -769,8 +724,8 @@ function Trainfitter.ScanGMA(gmapath)
         })
     end
 
-    --# если в GMA нет ни одного metrostroi-признака это вообще не наш аддон не маунтим до свидания
-    if skinFileCount == 0 and maskFileCount == 0 and metroAssetCount == 0 then
+    --# маркер metrostroi требуем только в safe-режиме, в full админ ставит что хочет
+    if not fullLua and skinFileCount == 0 and maskFileCount == 0 and metroAssetCount == 0 then
         f:Close()
         return false,
             "not a Metrostroi addon (no lua/metrostroi/skins/*.lua, "
@@ -779,7 +734,6 @@ function Trainfitter.ScanGMA(gmapath)
             files
     end
 
-    --# второй проход читаем тела lua валидируем и кешируем остальное скипаем (через Seek или ручным чтением)
     local luaBytesScanned = 0
     for _, e in ipairs(entries) do
         if e.isAddonLua then
@@ -803,11 +757,9 @@ function Trainfitter.ScanGMA(gmapath)
                 f:Close()
                 return false, reason, files
             end
-            --# тело валидно кешим потом ExecSandboxed возьмёт его отсюда а не через file.Read
             luaBodies[string.lower(e.name)] = body
         else
             if e.size > 0 then
-                --# не-lua просто скипаем сначала пытаемся Seek (быстро) если не получилось читаем чанками и выкидываем
                 local okT, pos  = pcall(f.Tell, f)
                 local seeked    = false
                 if okT and isnumber(pos) then
@@ -831,15 +783,12 @@ function Trainfitter.ScanGMA(gmapath)
     return true, nil, files, luaBodies
 end
 
---# клиентский convar игрок может выключить у себя сканирование на свой риск конечно
 if CLIENT then
     CreateClientConVar("trainfitter_gma_scan", "1", true, false,
         "1 = scan GMA before mounting (guards against non-skin addons).")
 end
 
---# серверные convars управляющие защитой каждый можно крутить отдельно чтоб владелец сервера сам решал что ему важнее (безопасность или гибкость)
 if SERVER then
-    --# главные сторожа GMA-скана PROTECTED чтоб клиент не дёрнул их через rcon-suggest
     CreateConVar("trainfitter_server_gma_scan", "1",
         { FCVAR_ARCHIVE, FCVAR_PROTECTED },
         "1 = server-side strict Metrostroi-only GMA validation (keep enabled).")
@@ -848,33 +797,35 @@ if SERVER then
         { FCVAR_ARCHIVE, FCVAR_PROTECTED },
         "1 = runtime content scan on every .lua file before execution.")
 
-    --# ОПАСНО включает full-Lua режим когда включено можно ставить пульты custom SENT расширенные маски кастомные effects-ы всё что содержит реальный код эти файлы выполняются БЕЗ ПЕСОЧНИЦЫ с полными правами сервера включать ТОЛЬКО если ты доверяешь ВСЕМ кто может ставить аддоны лучше комбинировать с trainfitter_use_whitelist 1 и trainfitter_require_admin 1 REPLICATED чтоб клиентский ScanGMA знал решение сервера и не резал mask/pult сам (PROTECTED не ставим оно конфликтует с REPLICATED по смыслу одно прячет от клиента второе шлёт ему значение свитча 0/1 клиенту знать безопасно)
     CreateConVar("trainfitter_allow_full_lua", "0",
         { FCVAR_ARCHIVE, FCVAR_REPLICATED },
         "DANGEROUS: 1 = allow pults / custom SENT / full-Lua addons. " ..
         "These run UNSANDBOXED with full server permissions. " ..
         "Only enable if you fully trust everyone who can install addons.")
 
-    --# гибкие лимиты все REPLICATED чтоб клиент тоже считал одинаково
-    --# trainfitter_max_lua_kb максимальный размер одного addon-lua файла в КБ дефолт 64 если твой скин жирнее (бывает) подними диапазон 1-1024 (1 МБ максимум)
     CreateConVar("trainfitter_max_lua_kb", "64",
         { FCVAR_ARCHIVE, FCVAR_REPLICATED },
         "Max size of one addon-lua file in KB. Default 64. Clamped to 1-1024. " ..
         "Raise if your masks are bigger than 64KB (rare but happens).")
 
-    --# trainfitter_sandbox_instr_m лимит инструкций для песочницы в миллионах дефолт 100 (тысячные доли секунды убегания) подними если у тебя тяжёлая инициализация маски с процедурной генерацией текстур диапазон 1-10000
     CreateConVar("trainfitter_sandbox_instr_m", "100",
         { FCVAR_ARCHIVE, FCVAR_REPLICATED },
         "Max sandbox instruction count in millions. Default 100. Clamped to 1-10000. " ..
         "Raise if heavy masks time out during init.")
 
-    --# trainfitter_reject_bytecode 1 (дефолт) = режем lua-байткод 0 = пускаем байткод дыра в любую щель но если ты ВОТ ПРЯМ доверяешь источникам и тебе зачем-то нужен прекомпил - можно
     CreateConVar("trainfitter_reject_bytecode", "1",
         { FCVAR_ARCHIVE, FCVAR_REPLICATED },
         "1 = reject Lua bytecode (default, safe). 0 = allow it (DANGEROUS).")
+
+    CreateConVar("trainfitter_allow_collections", "0",
+        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+        "1 = let players apply whole Workshop collections at once. 0 = single addons only.")
+
+    CreateConVar("trainfitter_max_collection", "0",
+        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+        "Max addons pulled from one collection. 0 = unlimited (use with care).")
 end
 
---# сканировать ли GMA вообще дефолт да и не надо ничего трогать
 function Trainfitter.ShouldScanGMA()
     if SERVER then
         local cv = GetConVar("trainfitter_server_gma_scan")
@@ -884,7 +835,6 @@ function Trainfitter.ShouldScanGMA()
     return cv and cv:GetBool() ~= false
 end
 
---# сканировать ли отдельный .lua перед компиляцией на клиенте всегда true и точка
 function Trainfitter.ShouldContentScan()
     if SERVER then
         local cv = GetConVar("trainfitter_content_scan")
@@ -893,8 +843,19 @@ function Trainfitter.ShouldContentScan()
     return true
 end
 
---# full-lua режим (см конвар trainfitter_allow_full_lua) работает одинаково на сервере и клиенте (convar реплицируется) если включено ScanGMA пускает больше lua-путей (маски пульты SENT) а ServerExecuteSkinFiles исполняет эти расширенные пути БЕЗ ПЕСОЧНИЦЫ на клиенте то же самое клиентский ScanGMA не отвергает то что сервер принял
 function Trainfitter.ShouldAllowFullLua()
     local cv = GetConVar("trainfitter_allow_full_lua")
     return cv ~= nil and cv:GetBool() == true
+end
+
+function Trainfitter.AllowCollections()
+    local cv = GetConVar("trainfitter_allow_collections")
+    return cv == nil or cv:GetBool() ~= false
+end
+
+function Trainfitter.GetMaxCollection()
+    local cv = GetConVar("trainfitter_max_collection")
+    local n = cv and cv:GetInt() or 0
+    if n <= 0 then return math.huge end
+    return n
 end

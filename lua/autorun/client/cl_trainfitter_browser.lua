@@ -113,10 +113,10 @@ function PANEL:Init()
         return b
     end
 
-    local backBtn    = NavBtn("Back",    "icon16/arrow_left.png")
-    local fwdBtn     = NavBtn("Forward", "icon16/arrow_right.png")
-    local refreshBtn = NavBtn(Trainfitter.L("refresh"), "icon16/arrow_refresh.png")
-    local homeBtn    = NavBtn("Home",    "icon16/house.png")
+    local backBtn    = NavBtn(Trainfitter.L("nav_back"),    "icon16/arrow_left.png")
+    local fwdBtn     = NavBtn(Trainfitter.L("nav_forward"), "icon16/arrow_right.png")
+    local refreshBtn = NavBtn(Trainfitter.L("refresh"),     "icon16/arrow_refresh.png")
+    local homeBtn    = NavBtn(Trainfitter.L("nav_home"),    "icon16/house.png")
 
     local urlEntry = vgui.Create("DTextEntry", nav)
     urlEntry:Dock(FILL); urlEntry:DockMargin(4, 6, 4, 6)
@@ -207,7 +207,7 @@ function PANEL:Init()
             v = "https://" .. v
         elseif scheme ~= "http" and scheme ~= "https" then
             statusLbl:SetTextColor(C.err)
-            statusLbl:SetText("Only http:// and https:// URLs are allowed.")
+            statusLbl:SetText(Trainfitter.L("only_http_urls"))
             return
         end
         browser:OpenURL(v)

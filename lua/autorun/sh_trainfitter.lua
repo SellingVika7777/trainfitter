@@ -2,7 +2,7 @@
 -- Made by SellingVika.
 
 Trainfitter         = Trainfitter or {}
-Trainfitter.Version = "2.2.9"
+Trainfitter.Version = "2.3.0"
 
 if SERVER then
     AddCSLuaFile("trainfitter/sh_config.lua")
