@@ -1,0 +1,22 @@
+# Trainfitter - Cargo.toml
+# Made by SellingVika
+
+[package]
+name = "gmsv_workshop"
+version = "4.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "unwind"
+strip = true
+
+[dependencies]
+lzma-rs = { version = "0.3", default-features = false }

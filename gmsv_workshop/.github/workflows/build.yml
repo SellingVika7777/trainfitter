@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,i686-unknown-linux-gnu
+      - name: Install zig
+        run: pip install ziglang==0.13.0 && cargo install cargo-zigbuild --locked
+      - name: Build
+        run: |
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17
+          cargo zigbuild --release --target i686-unknown-linux-gnu.2.17
+          mkdir -p out
+          cp target/x86_64-unknown-linux-gnu/release/libgmsv_workshop.so out/gmsv_workshop_linux64.dll
+          cp target/i686-unknown-linux-gnu/release/libgmsv_workshop.so out/gmsv_workshop_linux.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,i686-pc-windows-msvc
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          cargo build --release --target i686-pc-windows-msvc
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\gmsv_workshop.dll out\gmsv_workshop_win64.dll
+          Copy-Item target\i686-pc-windows-msvc\release\gmsv_workshop.dll out\gmsv_workshop_win32.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build_linux, build_windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
