@@ -19,6 +19,19 @@ local C = {
     accent    = Color(70,  140, 90),
 }
 
+local ALLOWED_HOSTS = { "steamcommunity.com", "store.steampowered.com", "steampowered.com" }
+
+local function AllowedURL(url)
+    if not isstring(url) then return false end
+    if url == "" or url == "about:blank" then return true end
+    local host = string.match(string.lower(url), "^https?://([%w%.%-]+)")
+    if not host then return false end
+    for _, h in ipairs(ALLOWED_HOSTS) do
+        if host == h or string.sub(host, -(#h + 1)) == "." .. h then return true end
+    end
+    return false
+end
+
 local function ExtractWSID(url)
     if not isstring(url) then return nil end
     return string.match(url, "://steamcommunity%.com/sharedfiles/filedetails/.-[%?%&]id=(%d+)")
@@ -210,16 +223,17 @@ function PANEL:Init()
             statusLbl:SetText(Trainfitter.L("only_http_urls"))
             return
         end
+        if not AllowedURL(v) then
+            statusLbl:SetTextColor(C.err)
+            statusLbl:SetText(Trainfitter.L("only_steam_urls"))
+            return
+        end
         browser:OpenURL(v)
     end
 
     selectBtn.DoClick = function()
         local wsid = self.currentWSID
         if not wsid then return end
-
-        if steamworks and isfunction(steamworks.Subscribe) then
-            pcall(steamworks.Subscribe, wsid)
-        end
 
         if Trainfitter.Request(wsid, persistBox:GetChecked() == true) then
             statusLbl:SetTextColor(C.ok)
@@ -229,18 +243,28 @@ function PANEL:Init()
         end
     end
 
+    local function Guard(url)
+        if AllowedURL(url) then return true end
+        statusLbl:SetTextColor(C.err)
+        statusLbl:SetText(Trainfitter.L("only_steam_urls"))
+        if isfunction(browser.StopLoading) then pcall(browser.StopLoading, browser) end
+        browser:OpenURL(DEFAULT_URL)
+        return false
+    end
+
     browser.OnDocumentReady = function(_, url)
+        if not Guard(url) then return end
         UpdateURL(url)
         browser:QueueJavascript(INJECT_JS)
     end
-    browser.OnFinishLoadingDocument = function(_, url) UpdateURL(url) end
-    browser.OnBeginLoadingDocument  = function(_, url) UpdateURL(url) end
+    browser.OnFinishLoadingDocument = function(_, url) if Guard(url) then UpdateURL(url) end end
+    browser.OnBeginLoadingDocument  = function(_, url) if Guard(url) then UpdateURL(url) end end
     browser.OnChangeTargetURL       = function(_, url)
         if isstring(url) and url ~= "" then statusLbl:SetText(url) end
     end
 
     browser:AddFunction("gmod", "tfselect", function()
-        if self.currentWSID then selectBtn:DoClick() end
+        if self.currentWSID and AllowedURL(urlEntry:GetValue()) then selectBtn:DoClick() end
     end)
 
     browser:OpenURL(DEFAULT_URL)

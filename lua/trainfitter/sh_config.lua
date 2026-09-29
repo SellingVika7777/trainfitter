@@ -28,6 +28,8 @@ Trainfitter.Net = {
     GetLogs          = "Trainfitter.GetLogs",
     Logs             = "Trainfitter.Logs",
     ResyncSkins      = "Trainfitter.ResyncSkins",
+    HostFetch        = "Trainfitter.HostFetch",
+    HostFetched      = "Trainfitter.HostFetched",
 }
 
 if SERVER then
@@ -64,11 +66,46 @@ if SERVER then
     CreateConVar("trainfitter_server_premount", "1", FCVAR_ARCHIVE,
         "Server pre-mounts persistent GMAs on boot (speeds up ENT.Skins).", 0, 1)
 
+    CreateConVar("trainfitter_max_session_addons", "100", FCVAR_ARCHIVE,
+        "Max different addons players may load during one map session (admins exempt). 0 = unlimited.", 0, 1000)
+
+    CreateConVar("trainfitter_max_new_per_hour", "20", FCVAR_ARCHIVE,
+        "Max new addons one player may load per hour (admins exempt). 0 = unlimited.", 0, 1000)
+
+    CreateConVar("trainfitter_cache_max_gb", "20", FCVAR_ARCHIVE,
+        "Max size of the Trainfitter GMA cache in data/ (GB). Oldest files are removed first. 0 = unlimited.", 0, 1000)
+
     CreateConVar("trainfitter_use_http", "0", FCVAR_ARCHIVE,
         "1 = force HTTP fetch even on dedicated server with gmsv_workshop. "
         .. "0 = auto: native on dedicated srcds with gmsv_workshop, HTTP on listen-server / when "
         .. "gmsv_workshop missing.", 0, 1)
 end
+
+CreateConVar("trainfitter_allow_masks", "1", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY },
+    "1 = allow masks, pults and other scripted Metrostroi addons. Their Lua runs in the Trainfitter sandbox.", 0, 1)
+
+CreateConVar("trainfitter_mel_support", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY },
+    "1 = this server runs Metrostroi Extensions Library (MEL), addons that require MEL are allowed. "
+    .. "0 = addons that require MEL are rejected.", 0, 1)
+
+CreateConVar("trainfitter_allow_full_lua", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "DANGEROUS: 1 = addons on the whitelist run their Lua WITHOUT the sandbox with full server permissions. "
+    .. "Addons that are not whitelisted always stay sandboxed.", 0, 1)
+
+CreateConVar("trainfitter_max_lua_kb", "256", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "Max size of one addon Lua file in KB.", 1, 4096)
+
+CreateConVar("trainfitter_sandbox_instr_m", "100", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "Max sandbox instructions (millions) for loading one addon file.", 1, 10000)
+
+CreateConVar("trainfitter_reject_bytecode", "1", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "1 = reject Lua bytecode (default, safe). Only affects trainfitter_allow_full_lua mode.", 0, 1)
+
+CreateConVar("trainfitter_allow_collections", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "1 = let players apply whole Workshop collections at once. 0 = single addons only.", 0, 1)
+
+CreateConVar("trainfitter_max_collection", "0", { FCVAR_ARCHIVE, FCVAR_REPLICATED },
+    "Max addons pulled from one collection. 0 = unlimited.", 0, 256)
 
 if CLIENT then
     CreateClientConVar("trainfitter_auto_subscribe", "1", true, false,
@@ -81,7 +118,7 @@ if CLIENT then
 end
 
 Trainfitter.Config.DefaultMaxMB    = 200
-Trainfitter.Config.MountTimeoutSec = 60
+Trainfitter.Config.MountTimeoutSec = 900
 
 Trainfitter.WSID_MAX_LEN = 20
 Trainfitter.GMOD_APPID   = 4000
@@ -166,6 +203,66 @@ function Trainfitter.SafeFetchWorkshopInfo(wsid, cb)
         end,
         function(err) cb(nil, "http.Post: " .. tostring(err)) end
     )
+end
+
+Trainfitter._depsCache = Trainfitter._depsCache or {}
+local DEPS_TTL = 600
+
+local function ParseRequiredItems(body, wsid)
+    local out, seen = {}, {}
+    local s = string.find(body, 'id="RequiredItems"', 1, true)
+    if not s then return out end
+    local e = string.find(body, "rightSectionTopTitle", s, true) or (s + 20000)
+    local seg = string.sub(body, s, e)
+    for id in string.gmatch(seg, "filedetails/%?id=(%d+)") do
+        if id ~= wsid and not seen[id] and Trainfitter.IsValidWSID(id) then
+            seen[id] = true
+            out[#out + 1] = id
+        end
+    end
+    return out
+end
+
+function Trainfitter.FetchRequiredItems(wsid, cb)
+    if not Trainfitter.IsValidWSID(wsid) then cb(nil, "invalid wsid") return end
+    local cached = Trainfitter._depsCache[wsid]
+    if cached and (SysTime() - cached.at) < DEPS_TTL then cb(cached.list, cached.source) return end
+
+    local function store(list, source)
+        Trainfitter._depsCache[wsid] = { at = SysTime(), list = list, source = source }
+        cb(list, source)
+    end
+
+    local function viaWeb()
+        http.Fetch("https://steamcommunity.com/sharedfiles/filedetails/?id=" .. wsid, function(body, _, _, code)
+            if not isstring(body) or (code and code >= 400) or #body > 8 * 1024 * 1024 then
+                cb(nil, "workshop page unavailable")
+                return
+            end
+            if not string.find(body, "sharedfiles_content_ctn", 1, true) then
+                cb(nil, "workshop page unreadable")
+                return
+            end
+            store(ParseRequiredItems(body, wsid), "web")
+        end, function(err) cb(nil, "http: " .. tostring(err)) end, { ["Accept-Language"] = "en-US,en" })
+    end
+
+    if SERVER and steamworks and isstring(steamworks.gmsv_workshop) and isfunction(steamworks.FileInfo) then
+        local ok = pcall(steamworks.FileInfo, wsid, function(info)
+            if istable(info) and info.error == nil and istable(info.children) then
+                local list = {}
+                for _, id in ipairs(info.children) do
+                    id = tostring(id)
+                    if id ~= wsid and Trainfitter.IsValidWSID(id) then list[#list + 1] = id end
+                end
+                store(list, "steam")
+            else
+                viaWeb()
+            end
+        end)
+        if ok then return end
+    end
+    viaWeb()
 end
 
 function Trainfitter.FetchCollectionChildren(wsid, cb)
@@ -331,8 +428,7 @@ if not Trainfitter._builtinProvidersRegistered then
             decided, result = true, (hasAccess == true)
         end, nil, { Fallback = "no_one" })
         if not decided then return nil end
-        if result then return true end
-        return nil
+        return result == true
     end)
 end
 
@@ -347,10 +443,13 @@ local function CheckPrivilege(ply, accessName, fallback)
     if not IsValid(ply) then return false end
     if IsServerOwner(ply) then return true end
 
+    local denied = false
     for _, p in ipairs(Trainfitter._PermProviders) do
         local ok, res = pcall(p.fn, ply, accessName)
         if ok and res == true then return true end
+        if ok and res == false then denied = true end
     end
+    if denied then return false end
 
     return fallback(ply) == true
 end

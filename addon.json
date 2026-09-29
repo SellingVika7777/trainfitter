@@ -8,6 +8,13 @@
         "*.svn*",
         "*.git*",
         "README.md",
-        ".gitattributes"
+        ".gitattributes",
+        "gmsv_workshop/*",
+        "*.rs",
+        "*.toml",
+        "*.dll",
+        "*.ps1",
+        "*.sh",
+        "*.lock"
     ]
 }

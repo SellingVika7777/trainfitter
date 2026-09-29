@@ -10,6 +10,9 @@ Trainfitter.History        = Trainfitter.History or {}
 Trainfitter.ActiveSkin     = Trainfitter.ActiveSkin or nil
 Trainfitter.AdminConfig    = Trainfitter.AdminConfig or nil
 Trainfitter.MountedSkins   = Trainfitter.MountedSkins or {}
+Trainfitter.Executed       = Trainfitter.Executed or {}
+Trainfitter.SkinStash      = Trainfitter.SkinStash or {}
+Trainfitter.AutoSubscribed = Trainfitter.AutoSubscribed or {}
 
 local queue     = {}
 local currentDL = nil
@@ -132,6 +135,33 @@ end)
 
 LoadHistory()
 
+local CLIENT_CACHE_CAP = 10 * 1024 * 1024 * 1024
+
+local function SweepClientCache()
+    if not file.IsDir("trainfitter/gmas_cl", "DATA") then return end
+    local cutoff = os.time() - 14 * 24 * 3600
+    local files, total = {}, 0
+    for _, fname in ipairs(file.Find("trainfitter/gmas_cl/*.dat", "DATA") or {}) do
+        local rel = "trainfitter/gmas_cl/" .. fname
+        local t = file.Time(rel, "DATA") or 0
+        if t < cutoff then
+            pcall(file.Delete, rel)
+        else
+            local size = file.Size(rel, "DATA") or 0
+            total = total + size
+            files[#files + 1] = { rel = rel, t = t, size = size }
+        end
+    end
+    if total <= CLIENT_CACHE_CAP then return end
+    table.sort(files, function(a, b) return a.t < b.t end)
+    for _, f in ipairs(files) do
+        if total <= CLIENT_CACHE_CAP then break end
+        file.Delete(f.rel)
+        if not file.Exists(f.rel, "DATA") then total = total - f.size end
+    end
+end
+SweepClientCache()
+
 local function PurgeDirOfFiles(relDir, mask)
     if not file.IsDir(relDir, "DATA") then return 0 end
     local files = file.Find(relDir .. "/" .. (mask or "*"), "DATA") or {}
@@ -155,7 +185,7 @@ function Trainfitter.PurgeAllClient()
     if file.Exists(HISTORY_FILE, "DATA") then pcall(file.Delete, HISTORY_FILE) end
 
     local previews = PurgeDirOfFiles("trainfitter/previews", "*.png")
-    local gmas     = PurgeDirOfFiles("trainfitter/gmas",     "*.gma")
+    local gmas     = PurgeDirOfFiles("trainfitter/gmas_cl", "*.dat") + PurgeDirOfFiles("trainfitter/gmas", "*.gma")
 
     hook.Run("Trainfitter.HistoryUpdated")
     hook.Run("Trainfitter.PersistentUpdated", {})
@@ -169,86 +199,31 @@ concommand.Add("trainfitter_client_purge", function()
     Trainfitter.PurgeAllClient()
 end)
 
-local function SnapshotMetrostroiTable(t)
-    local snap = {}
-    if not istable(t) then return snap end
-    for category, bucket in pairs(t) do
-        if istable(bucket) then
-            snap[category] = {}
-            for name in pairs(bucket) do snap[category][name] = true end
-        end
+local function SendOwnership(wsid, ownership)
+    if not istable(ownership) or #ownership == 0 or #ownership > 64 then return end
+    net.Start(NET.ReportSkins)
+    net.WriteString(wsid)
+    net.WriteUInt(#ownership, 8)
+    for _, e in ipairs(ownership) do
+        net.WriteString(string.sub(e.kind     or "skin", 1, 8))
+        net.WriteString(string.sub(e.category or "", 1, 16))
+        net.WriteString(string.sub(e.name     or "", 1, 64))
+        net.WriteString(string.sub(e.typ      or "", 1, 32))
     end
-    return snap
+    net.SendToServer()
 end
 
-local function SnapshotSkins()
-    if not Metrostroi then return { skins = {}, masks = {} } end
-    return {
-        skins = SnapshotMetrostroiTable(Metrostroi.Skins),
-        masks = SnapshotMetrostroiTable(Metrostroi.Masks),
-    }
-end
-
-local function DiffInto(currentTbl, beforeTbl, ownership, kind, log)
-    if not istable(currentTbl) then return 0 end
-    local total = 0
-    for category, bucket in pairs(currentTbl) do
-        if istable(bucket) then
-            local newOnes = {}
-            for name, data in pairs(bucket) do
-                if not (beforeTbl[category] and beforeTbl[category][name]) then
-                    if istable(data) then
-                        local typ = data.typ or ""
-                        table.insert(ownership, {
-                            kind     = kind,
-                            category = category,
-                            name     = name,
-                            typ      = typ,
-                        })
-                        local display = data.name or name
-                        table.insert(newOnes, string.format("'%s' (typ=%s)", display, typ))
-                    end
-                end
-            end
-            if #newOnes > 0 then
-                total = total + #newOnes
-                MsgC(Color(180, 220, 255),
-                    string.format("[Trainfitter] New %s in Metrostroi.%s.%s: %s\n",
-                        log, log, category, table.concat(newOnes, ", ")))
-            end
-        end
+function Trainfitter.ReportOwnership(wsid, owned)
+    if not wsid or not istable(owned) or #owned == 0 then return end
+    local list = {}
+    for _, e in ipairs(owned) do
+        list[#list + 1] = { kind = e.kind, category = e.category, name = e.name, typ = e.typ }
+        MsgC(Color(180, 220, 255), string.format("[Trainfitter] New %s '%s' (typ=%s)\n",
+            e.kind, tostring(e.display or e.name), tostring(e.typ)))
     end
-    return total
-end
-
-function Trainfitter.DiffAndReportSkins(before, wsid)
-    if not Metrostroi then return end
-    before = before or { skins = {}, masks = {} }
-
-    local ownership = {}
-    local totalNew = 0
-    totalNew = totalNew + DiffInto(Metrostroi.Skins, before.skins or {}, ownership, "skin", "Skins")
-    totalNew = totalNew + DiffInto(Metrostroi.Masks, before.masks or {}, ownership, "mask", "Masks")
-
-    if wsid and #ownership > 0 then
-        Trainfitter.MountedSkins[wsid] = ownership
-        if #ownership <= 64 then
-            net.Start(NET.ReportSkins)
-            net.WriteString(wsid)
-            net.WriteUInt(#ownership, 8)
-            for _, e in ipairs(ownership) do
-                net.WriteString(string.sub(e.kind     or "skin", 1, 8))
-                net.WriteString(string.sub(e.category or "", 1, 16))
-                net.WriteString(string.sub(e.name     or "", 1, 64))
-                net.WriteString(string.sub(e.typ      or "", 1, 32))
-            end
-            net.SendToServer()
-        end
-    end
-
-    if totalNew > 0 then
-        MsgC(Color(120, 220, 150), "[Trainfitter] " .. Trainfitter.L("apply_hint") .. "\n")
-    end
+    Trainfitter.MountedSkins[wsid] = list
+    SendOwnership(wsid, list)
+    MsgC(Color(120, 220, 150), "[Trainfitter] " .. Trainfitter.L("apply_hint") .. "\n")
 end
 
 local function ProcessQueue()
@@ -294,7 +269,7 @@ local function ProcessQueue()
     timer.Create("Trainfitter.DLTimeout." .. wsid, Trainfitter.Config.MountTimeoutSec, 1,
         function() finish(false, "timeout") end)
 
-    local sharedCache = "trainfitter/gmas/" .. wsid .. ".gma"
+    local sharedCache = "trainfitter/http/" .. wsid .. ".dat"
     local sharedCachePath = "data/" .. sharedCache
     local function continueWithPath(path, apiSource)
         if finished then return end
@@ -304,136 +279,65 @@ local function ProcessQueue()
             return
         end
 
-        local fullLuaForThis = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
-
-        local scanBodies = nil
-        if Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-            local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path, fullLuaForThis)
-            scanBodies = bodies
-            if not callOK then
-                MsgC(Color(255, 180, 80),
-                    "[Trainfitter] scanner crashed on " .. wsid ..
-                    ": " .. tostring(safe) .. " - mounting with runtime scan only\n")
-            elseif not safe then
-                Trainfitter.ChatMsg(Trainfitter.L("refused_mount", wsid, tostring(reason)), COL_ERR)
-                finish(false, "scan rejected: " .. tostring(reason), apiSource)
-                return
-            end
+        local mountInfo = Trainfitter.LastMountInfo[wsid]
+        local fullLua = Trainfitter.ShouldAllowFullLua() and istable(mountInfo) and mountInfo.trustedFull == true
+        local callOK, report = pcall(Trainfitter.ScanGMA, path, {
+            fullLua = fullLua,
+            allowMasks = Trainfitter.ShouldAllowMasks(),
+        })
+        if not callOK then
+            MsgC(Color(255, 120, 120), "[Trainfitter] scanner crashed on " .. wsid .. ": " .. tostring(report) .. "\n")
+            finish(false, "scanner crashed", apiSource)
+            return
         end
-
-        local ok, files = game.MountGMA(path)
-        if not ok then
-            finish(false, "mount failed", apiSource)
+        if not report.ok then
+            Trainfitter.ChatMsg(Trainfitter.L("refused_mount", wsid, tostring(report.reason)), COL_ERR)
+            finish(false, "scan rejected: " .. tostring(report.reason), apiSource)
             return
         end
 
-        local beforeSkins = SnapshotSkins()
-
-        if isbool(files) then files = {} end
-
-        local fullLua = fullLuaForThis
-
-        local function getBody(fpath)
-            local c = scanBodies and scanBodies[string.lower(fpath)] or nil
-            if not isstring(c) or #c == 0 then
-                c = file.Read(fpath, "GAME")
+        local function mountAndRun(mountPath)
+            if finished then return end
+            local ok, files = game.MountGMA(mountPath)
+            if not ok then
+                finish(false, "mount failed", apiSource)
+                return
             end
-            if isstring(c) and #c > 0 then return c end
-            return nil
-        end
+            if not istable(files) then files = {} end
 
-        local hooksBefore = {}
-        do
-            local t = hook.GetTable()["InitPostEntity"]
-            if istable(t) then for n in pairs(t) do hooksBefore[n] = true end end
-        end
+            local summary = Trainfitter.RunAddonLua(wsid, report, {
+                allowMasks = Trainfitter.ShouldAllowMasks(),
+                mel = Trainfitter.MELSupportEnabled(),
+                unsafe = fullLua,
+            })
+            Trainfitter.Executed[wsid] = true
+            Trainfitter.ReportOwnership(wsid, summary.owned)
 
-        local includedCount, pathMetrostroi, pathAutorun = 0, 0, 0
-        for _, fpath in ipairs(files or {}) do
-            if isstring(fpath) and string.sub(string.lower(fpath), -4) == ".lua" then
-                local low = string.lower(fpath)
-                local content = getBody(fpath)
-                if content then
-                    if string.sub(low, 1, 21) == "lua/metrostroi/skins/" then
-                        local preOK, preReason = Trainfitter.ValidateSkinLua(content, fpath)
-                        if not preOK then
-                            MsgC(Color(255, 120, 120),
-                                "[Trainfitter] Refused skin file (preflight): " ..
-                                tostring(preReason) .. "\n")
-                        else
-                            local ok, err = Trainfitter.ExecSandboxed(content, fpath, "skin")
-                            if ok then
-                                includedCount = includedCount + 1
-                                pathMetrostroi = pathMetrostroi + 1
-                            else
-                                MsgC(Color(255, 180, 80),
-                                    "[Trainfitter] sandboxed exec '" .. fpath ..
-                                    "' failed: " .. tostring(err) .. "\n")
-                            end
-                        end
-                    elseif fullLua then
-                        local rejectBC = Trainfitter.ShouldRejectBytecode
-                                         and Trainfitter.ShouldRejectBytecode()
-                        if rejectBC and string.byte(content, 1) == 0x1B then
-                            MsgC(Color(255, 120, 120),
-                                "[Trainfitter] Refused (bytecode, set trainfitter_reject_bytecode 0 to allow): " .. fpath .. "\n")
-                        else
-                            local fn, compileErr = CompileString(content, fpath, false)
-                            if isstring(fn) then
-                                MsgC(Color(255, 120, 120),
-                                    "[Trainfitter] Compile failed for " .. fpath .. ": " .. fn .. "\n")
-                            elseif isfunction(fn) then
-                                local ok, runErr = pcall(fn)
-                                if ok then
-                                    includedCount = includedCount + 1
-                                    pathAutorun = pathAutorun + 1
-                                else
-                                    MsgC(Color(255, 180, 80),
-                                        "[Trainfitter] unsandboxed exec '" .. fpath ..
-                                        "' failed: " .. tostring(runErr) .. "\n")
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        do
-            local t = hook.GetTable()["InitPostEntity"]
-            if istable(t) then
-                for name, fn in pairs(t) do
-                    if not hooksBefore[name] and isfunction(fn) then
-                        local ok, err = pcall(fn)
-                        if not ok then
-                            MsgC(Color(255, 180, 80), string.format(
-                                "[Trainfitter] Late-fire InitPostEntity hook '%s' from %s failed: %s\n",
-                                tostring(name), tostring(wsid), tostring(err)))
-                        end
-                    end
-                end
-            end
-        end
-
-        MsgC(Color(150, 220, 255),
-            string.format("[Trainfitter] %s: %d scripts executed (metrostroi/skins+masks=%d, autorun=%d, total files=%d)\n",
-                tostring(wsid), includedCount, pathMetrostroi, pathAutorun, #(files or {})))
-
-        Trainfitter.DiffAndReportSkins(beforeSkins, wsid)
-
-        Trainfitter.SafeFetchWorkshopInfo(wsid, function(info)
-            if info and info.title and info.title ~= "" then
-                Trainfitter.LastMountInfo[wsid] = Trainfitter.LastMountInfo[wsid] or {}
-                Trainfitter.LastMountInfo[wsid].title = info.title
-                Trainfitter.LastMountInfo[wsid].size  = info.size
-                Trainfitter.LastMountInfo[wsid].files = files
-            else
+            Trainfitter.SafeFetchWorkshopInfo(wsid, function(info)
                 Trainfitter.LastMountInfo[wsid] = Trainfitter.LastMountInfo[wsid] or {}
                 Trainfitter.LastMountInfo[wsid].files = files
+                if info and info.title and info.title ~= "" then
+                    Trainfitter.LastMountInfo[wsid].title = info.title
+                    Trainfitter.LastMountInfo[wsid].size  = info.size
+                end
+            end)
+
+            finish(true, nil, apiSource)
+        end
+
+        if fullLua or not report.hasLua then
+            mountAndRun(path)
+            return
+        end
+
+        Trainfitter.RepackGMA(path, report, wsid, function(cleanPath, err)
+            if not cleanPath then
+                finish(false, "repack failed: " .. tostring(err), apiSource)
+                return
             end
+            pcall(SweepClientCache)
+            mountAndRun(cleanPath)
         end)
-
-        finish(true, nil, apiSource)
     end
 
     if file.Exists(sharedCache, "DATA")
@@ -464,19 +368,7 @@ local function ProcessQueue()
 end
 
 function Trainfitter.ResendOwnership(wsid)
-    local ownership = Trainfitter.MountedSkins and Trainfitter.MountedSkins[wsid]
-    if not istable(ownership) or #ownership == 0 then return end
-    if #ownership > 64 then return end
-    net.Start(NET.ReportSkins)
-    net.WriteString(wsid)
-    net.WriteUInt(#ownership, 8)
-    for _, e in ipairs(ownership) do
-        net.WriteString(string.sub(e.kind     or "skin", 1, 8))
-        net.WriteString(string.sub(e.category or "", 1, 16))
-        net.WriteString(string.sub(e.name     or "", 1, 64))
-        net.WriteString(string.sub(e.typ      or "", 1, 32))
-    end
-    net.SendToServer()
+    SendOwnership(wsid, Trainfitter.MountedSkins and Trainfitter.MountedSkins[wsid])
 end
 
 function Trainfitter.SkinsEnabled()
@@ -484,21 +376,46 @@ function Trainfitter.SkinsEnabled()
     return cv == nil or cv:GetBool() ~= false
 end
 
-function Trainfitter.UnmountAllLocal()
-    if Metrostroi then
-        for _, owned in pairs(Trainfitter.MountedSkins or {}) do
-            if istable(owned) then
-                for _, entry in ipairs(owned) do
-                    local rootTbl = (entry.kind == "mask") and Metrostroi.Masks or Metrostroi.Skins
-                    if istable(rootTbl) and istable(rootTbl[entry.category]) then
-                        rootTbl[entry.category][entry.name] = nil
-                    end
-                end
-            end
+local function StashSkins(wsid)
+    local owned = Trainfitter.MountedSkins[wsid]
+    local removed = 0
+    if not istable(owned) or not Metrostroi then return 0 end
+    local stash = Trainfitter.SkinStash[wsid] or {}
+    for _, entry in ipairs(owned) do
+        local rootTbl = (entry.kind == "mask") and Metrostroi.Masks or Metrostroi.Skins
+        if istable(rootTbl) and istable(rootTbl[entry.category]) and rootTbl[entry.category][entry.name] ~= nil then
+            stash[#stash + 1] = { kind = entry.kind, category = entry.category, name = entry.name, typ = entry.typ,
+                                  data = rootTbl[entry.category][entry.name] }
+            rootTbl[entry.category][entry.name] = nil
+            removed = removed + 1
         end
     end
+    Trainfitter.SkinStash[wsid] = stash
+    return removed
+end
+
+local function RestoreSkins(wsid)
+    local stash = Trainfitter.SkinStash[wsid]
+    Trainfitter.SkinStash[wsid] = nil
+    if not istable(stash) or not Metrostroi then return end
+    local owned = {}
+    for _, e in ipairs(stash) do
+        local rootName = (e.kind == "mask") and "Masks" or "Skins"
+        Metrostroi[rootName] = Metrostroi[rootName] or {}
+        Metrostroi[rootName][e.category] = Metrostroi[rootName][e.category] or {}
+        if Metrostroi[rootName][e.category][e.name] == nil then
+            Metrostroi[rootName][e.category][e.name] = e.data
+        end
+        owned[#owned + 1] = { kind = e.kind, category = e.category, name = e.name, typ = e.typ }
+    end
+    if #owned > 0 then Trainfitter.MountedSkins[wsid] = owned end
+end
+
+function Trainfitter.UnmountAllLocal()
+    for wsid in pairs(Trainfitter.MountedSkins or {}) do StashSkins(wsid) end
     Trainfitter.MountedSkins = {}
     Trainfitter.Mounted = {}
+    Trainfitter.StopAllSandboxes()
 end
 
 function Trainfitter.ResyncSkins()
@@ -522,6 +439,13 @@ function Trainfitter.Enqueue(wsid, cb)
         if cb then pcall(cb, true) end
         return
     end
+    if Trainfitter.Executed[wsid] then
+        RestoreSkins(wsid)
+        Trainfitter.Mounted[wsid] = true
+        Trainfitter.ResendOwnership(wsid)
+        if cb then pcall(cb, true) end
+        return
+    end
     callbacks[wsid] = callbacks[wsid] or {}
     if cb then table.insert(callbacks[wsid], cb) end
 
@@ -540,8 +464,11 @@ net.Receive(NET.Broadcast, function()
     local title        = net.ReadString()
     local sizeMB       = net.ReadFloat()
     local initiatorSid = net.ReadString()
+    local trustedFull  = net.ReadBool()
+    if not Trainfitter.IsValidWSID(wsid) then return end
 
     Trainfitter.LastMountInfo[wsid] = Trainfitter.LastMountInfo[wsid] or {}
+    Trainfitter.LastMountInfo[wsid].trustedFull = trustedFull
     if title ~= "" then
         Trainfitter.LastMountInfo[wsid].title = title
         if sizeMB and sizeMB > 0 then
@@ -580,23 +507,11 @@ net.Receive(NET.ForgetSkin, function()
     local initiatorSid = net.ReadString()
     if not isstring(wsid) or wsid == "" then return end
 
+    if not Trainfitter.IsValidWSID(wsid) then return end
     Trainfitter.Mounted[wsid] = nil
     Trainfitter.LastMountInfo[wsid] = nil
 
-    local owned = Trainfitter.MountedSkins[wsid]
-    local removedCount = 0
-    if owned and Metrostroi then
-        for _, entry in ipairs(owned) do
-            local rootTbl = (entry.kind == "mask") and Metrostroi.Masks or Metrostroi.Skins
-            if istable(rootTbl) then
-                local bucket = rootTbl[entry.category]
-                if istable(bucket) and bucket[entry.name] ~= nil then
-                    bucket[entry.name] = nil
-                    removedCount = removedCount + 1
-                end
-            end
-        end
-    end
+    local removedCount = StashSkins(wsid)
     Trainfitter.MountedSkins[wsid] = nil
 
     if removedCount > 0 then
@@ -614,7 +529,8 @@ net.Receive(NET.ForgetSkin, function()
         end
     end
 
-    if steamworks and isfunction(steamworks.Unsubscribe) then
+    if Trainfitter.AutoSubscribed[wsid] and steamworks and isfunction(steamworks.Unsubscribe) then
+        Trainfitter.AutoSubscribed[wsid] = nil
         pcall(steamworks.Unsubscribe, wsid)
     end
 
@@ -778,7 +694,10 @@ function Trainfitter.Subscribe(wsid)
     if last and (now - last) < SUBSCRIBE_COOLDOWN_SEC then return false end
     subscribeCooldown[wsid] = now
 
-    return pcall(steamworks.Subscribe, wsid)
+    local subscribed = isfunction(steamworks.IsSubscribed) and steamworks.IsSubscribed(wsid)
+    local ok = pcall(steamworks.Subscribe, wsid)
+    if ok and not subscribed then Trainfitter.AutoSubscribed[wsid] = true end
+    return ok
 end
 
 function Trainfitter.Request(wsid, makeFavorite)
@@ -970,6 +889,40 @@ end)
 
 hook.Add("Trainfitter.SkinForgotten", "Trainfitter.ReloadTrains", function(wsid, initiatorSid)
     timer.Simple(1.0, function() Trainfitter.ReloadAllTrains(initiatorSid, wsid) end)
+end)
+
+net.Receive(NET.HostFetch, function()
+    local wsid = net.ReadString()
+    local lp = LocalPlayer()
+    if not IsValid(lp) or not lp:IsListenServerHost() then return end
+    if not Trainfitter.IsValidWSID(wsid) then return end
+    local function reply(path)
+        net.Start(NET.HostFetched)
+        net.WriteString(wsid)
+        net.WriteString(path or "")
+        net.SendToServer()
+    end
+    if not steamworks or not isfunction(steamworks.DownloadUGC) then reply("") return end
+    steamworks.DownloadUGC(wsid, function(path, f)
+        if not isstring(path) or path == "" then reply("") return end
+        if not string.find(path, ":", 1, true) and not string.find(path, "..", 1, true) and file.Exists(path, "GAME") then
+            reply(path)
+            return
+        end
+        if not f then reply("") return end
+        if not file.IsDir("trainfitter/http", "DATA") then file.CreateDir("trainfitter/http") end
+        local rel = "trainfitter/http/" .. wsid .. ".dat"
+        local out = file.Open(rel, "wb", "DATA")
+        if not out then reply("") return end
+        f:Seek(0)
+        while true do
+            local chunk = f:Read(4194304)
+            if not chunk or #chunk == 0 then break end
+            out:Write(chunk)
+        end
+        out:Close()
+        reply("data/" .. rel)
+    end)
 end)
 
 hook.Add("InitPostEntity", "Trainfitter.RequestInitial", function()

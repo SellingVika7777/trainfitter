@@ -68,8 +68,27 @@ local function SafeSetImage(img, path)
 end
 
 local PREVIEW_DIR = "trainfitter/previews"
+
+local PREVIEW_HOSTS = { "steamusercontent.com", "steamuserimages-a.akamaihd.net", "steamstatic.com", "steamcdn-a.akamaihd.net" }
+
+local function SafePreviewURL(url)
+    if not isstring(url) or #url > 512 then return false end
+    local host = string.match(string.lower(url), "^https://([%w%.%-]+)/")
+    if not host then return false end
+    for _, h in ipairs(PREVIEW_HOSTS) do
+        if host == h or string.sub(host, -(#h + 1)) == "." .. h then return true end
+    end
+    return false
+end
+
+local function IsImageData(body)
+    if not isstring(body) or #body < 64 or #body > 2 * 1024 * 1024 then return false end
+    local head = string.sub(body, 1, 4)
+    return head == "\137PNG" or string.sub(head, 1, 3) == "\255\216\255"
+end
+
 local function LoadPreviewImage(dimage, url, wsid)
-    if not IsValid(dimage) or not isstring(url) or url == "" then return end
+    if not IsValid(dimage) or not SafePreviewURL(url) or not Trainfitter.IsValidWSID(wsid) then return end
     if not file.IsDir(PREVIEW_DIR, "DATA") then file.CreateDir(PREVIEW_DIR) end
     local localPath = PREVIEW_DIR .. "/" .. wsid .. ".png"
     if file.Exists(localPath, "DATA") then
@@ -78,8 +97,7 @@ local function LoadPreviewImage(dimage, url, wsid)
     http.Fetch(url, function(body, _, _, code)
         if not IsValid(dimage) then return end
         if code and code >= 400 then return end
-        if not body or #body < 64 then return end
-        if #body > 2 * 1024 * 1024 then return end
+        if not IsImageData(body) then return end
         file.Write(localPath, body)
         SafeSetImage(dimage, "../data/" .. localPath)
     end, function() end)
@@ -149,7 +167,10 @@ local function MakePreviewPanel(parent)
 end
 
 local function LoadPreviewIntoPanel(panel, url, wsid)
-    if not IsValid(panel) or not isstring(url) or url == "" then return end
+    if not IsValid(panel) or not SafePreviewURL(url) or not Trainfitter.IsValidWSID(wsid) then
+        if IsValid(panel) then panel:Clear() end
+        return
+    end
     if not file.IsDir(PREVIEW_DIR, "DATA") then file.CreateDir(PREVIEW_DIR) end
     local localPath = PREVIEW_DIR .. "/" .. wsid .. ".png"
 
@@ -161,8 +182,7 @@ local function LoadPreviewIntoPanel(panel, url, wsid)
     http.Fetch(url, function(body, _, _, code)
         if not IsValid(panel) then return end
         if code and code >= 400 then panel:Clear() return end
-        if not body or #body < 64 then panel:Clear() return end
-        if #body > 2 * 1024 * 1024 then panel:Clear() return end
+        if not IsImageData(body) then panel:Clear() return end
         file.Write(localPath, body)
         panel:SetLocalImage("../data/" .. localPath)
     end, function() if IsValid(panel) then panel:Clear() end end)
@@ -176,74 +196,117 @@ local function LerpColor(t, a, b)
         Lerp(t, a.a or 255, b.a or 255))
 end
 
+local function ClipPolygon(poly, x0, y0, x1, y1)
+    local function clip(input, inside, cross)
+        local out = {}
+        local n = #input
+        if n == 0 then return out end
+        local prev = input[n]
+        local prevIn = inside(prev)
+        for i = 1, n do
+            local cur = input[i]
+            local curIn = inside(cur)
+            if curIn then
+                if not prevIn then out[#out + 1] = cross(prev, cur) end
+                out[#out + 1] = cur
+            elseif prevIn then
+                out[#out + 1] = cross(prev, cur)
+            end
+            prev, prevIn = cur, curIn
+        end
+        return out
+    end
+    local function atX(xv)
+        return function(a, b)
+            local t = (xv - a.x) / (b.x - a.x)
+            return { x = xv, y = a.y + (b.y - a.y) * t }
+        end
+    end
+    local function atY(yv)
+        return function(a, b)
+            local t = (yv - a.y) / (b.y - a.y)
+            return { x = a.x + (b.x - a.x) * t, y = yv }
+        end
+    end
+    poly = clip(poly, function(p) return p.x >= x0 end, atX(x0))
+    poly = clip(poly, function(p) return p.x <= x1 end, atX(x1))
+    poly = clip(poly, function(p) return p.y >= y0 end, atY(y0))
+    poly = clip(poly, function(p) return p.y <= y1 end, atY(y1))
+    return poly
+end
+
+local function DrawClippedPoly(poly, x0, y0, x1, y1)
+    local clipped = ClipPolygon(poly, x0, y0, x1, y1)
+    if #clipped < 3 then return end
+    local area = 0
+    for i = 1, #clipped do
+        local a, b = clipped[i], clipped[i % #clipped + 1]
+        area = area + (a.x * b.y - b.x * a.y)
+    end
+    if area < 0 then
+        local rev = {}
+        for i = #clipped, 1, -1 do rev[#rev + 1] = clipped[i] end
+        clipped = rev
+    end
+    surface.DrawPoly(clipped)
+end
+
+local function Band(ax, ay, bx, by, from, to)
+    local dx, dy = bx - ax, by - ay
+    local len = math.sqrt(dx * dx + dy * dy)
+    local nx, ny = -dy / len, dx / len
+    return {
+        { x = ax + nx * from, y = ay + ny * from },
+        { x = bx + nx * from, y = by + ny * from },
+        { x = bx + nx * to,   y = by + ny * to },
+        { x = ax + nx * to,   y = ay + ny * to },
+    }
+end
+
 local FLAG_PAINT = {
     en = function(x, y, w, h)
-        local cx   = x + w / 2
-        local cy   = y + h / 2
-        local angR = math.atan2(h, w)
-        local sinA = math.sin(angR)
-        local cosA = math.cos(angR)
-
-        surface.SetDrawColor(0, 36, 125)
-        surface.DrawRect(x, y, w, h)
-
-        render.SetScissorRect(x, y, x + w, y + h, true)
+        local x1, y1 = x + w, y + h
+        local cx, cy = x + w / 2, y + h / 2
+        local u = h / 30
         draw.NoTexture()
 
-        local function strip(x1, y1, x2, y2, halfW, nx, ny, oMag)
-            oMag = oMag or 0
-            local ox, oy = nx * oMag, ny * oMag
-            surface.DrawPoly({
-                { x = x1 + nx * halfW + ox, y = y1 + ny * halfW + oy },
-                { x = x1 - nx * halfW + ox, y = y1 - ny * halfW + oy },
-                { x = x2 - nx * halfW + ox, y = y2 - ny * halfW + oy },
-                { x = x2 + nx * halfW + ox, y = y2 + ny * halfW + oy },
-            })
-        end
-
-        local satW = math.max(4, math.floor(h * 0.32))
-        local satR = math.max(2, math.floor(satW * 0.55))
-        local off  = math.max(1, math.floor((satW - satR) / 2))
-
-        local nxBack,  nyBack  = -sinA, cosA
-        local nxSlash, nySlash =  sinA, cosA
+        surface.SetDrawColor(1, 33, 105)
+        surface.DrawRect(x, y, w, h)
 
         surface.SetDrawColor(255, 255, 255)
-        strip(x,     y,     x + w, y + h, satW / 2, nxBack,  nyBack)
-        strip(x,     y + h, x + w, y,     satW / 2, nxSlash, nySlash)
+        DrawClippedPoly(Band(x - w, y - h, x1 + w, y1 + h, -3 * u, 3 * u), x, y, x1, y1)
+        DrawClippedPoly(Band(x - w, y1 + h, x1 + w, y - h, -3 * u, 3 * u), x, y, x1, y1)
 
-        surface.SetDrawColor(207, 20, 43)
-        strip(x,  y,     cx,    cy,    satR / 2, nxBack,  nyBack,   off)
-        strip(cx, cy,    x + w, y + h, satR / 2, nxBack,  nyBack,  -off)
-        strip(cx, cy,    x + w, y,     satR / 2, nxSlash, nySlash,  off)
-        strip(x,  y + h, cx,    cy,    satR / 2, nxSlash, nySlash, -off)
+        surface.SetDrawColor(200, 16, 46)
+        DrawClippedPoly(Band(x, y, cx, cy, 0, 2 * u), x, y, cx, cy)
+        DrawClippedPoly(Band(cx, cy, x1, y1, -2 * u, 0), cx, cy, x1, y1)
+        DrawClippedPoly(Band(x, y1, cx, cy, 0, 2 * u), x, cy, cx, y1)
+        DrawClippedPoly(Band(cx, cy, x1, y, -2 * u, 0), cx, y, x1, cy)
 
-        render.SetScissorRect(0, 0, 0, 0, false)
-
-        local crW = math.max(4, math.floor(h * 0.34))
-        local crR = math.max(2, math.floor(crW * 0.55))
-
+        local cw = math.max(3, math.Round(10 * u))
+        local rw = math.max(1, math.Round(6 * u))
+        if (cw - rw) % 2 == 1 then cw = cw + 1 end
         surface.SetDrawColor(255, 255, 255)
-        surface.DrawRect(math.floor(cx - crW / 2), y, crW, h)
-        surface.DrawRect(x, math.floor(cy - crW / 2), w, crW)
-
-        surface.SetDrawColor(207, 20, 43)
-        surface.DrawRect(math.floor(cx - crR / 2), y, crR, h)
-        surface.DrawRect(x, math.floor(cy - crR / 2), w, crR)
+        surface.DrawRect(math.Round(cx - cw / 2), y, cw, h)
+        surface.DrawRect(x, math.Round(cy - cw / 2), w, cw)
+        surface.SetDrawColor(200, 16, 46)
+        surface.DrawRect(math.Round(cx - rw / 2), y, rw, h)
+        surface.DrawRect(x, math.Round(cy - rw / 2), w, rw)
     end,
     ru = function(x, y, w, h)
         local third = math.floor(h / 3)
-        surface.SetDrawColor(255, 255, 255) surface.DrawRect(x, y,           w, third)
-        surface.SetDrawColor( 60, 100, 180) surface.DrawRect(x, y + third,   w, third)
-        surface.SetDrawColor(220,  40,  50) surface.DrawRect(x, y + 2*third, w, h - 2*third)
+        surface.SetDrawColor(255, 255, 255) surface.DrawRect(x, y,             w, third)
+        surface.SetDrawColor(  0,  57, 166) surface.DrawRect(x, y + third,     w, third)
+        surface.SetDrawColor(213,  43,  30) surface.DrawRect(x, y + 2 * third, w, h - 2 * third)
     end,
     da = function(x, y, w, h)
-        surface.SetDrawColor(200, 40, 50) surface.DrawRect(x, y, w, h)
-        local cx = x + math.floor(w * 0.34)
-        local cy = y + math.floor(h * 0.5) - 1
+        surface.SetDrawColor(200, 16, 46) surface.DrawRect(x, y, w, h)
+        local bar = math.max(2, math.Round(h * 4 / 28))
+        local cx = x + math.Round(w * 12 / 37)
+        local cy = y + math.Round((h - bar) / 2)
         surface.SetDrawColor(255, 255, 255)
-        surface.DrawRect(cx, y, 3, h)
-        surface.DrawRect(x, cy, w, 3)
+        surface.DrawRect(cx, y, bar, h)
+        surface.DrawRect(x, cy, w, bar)
     end,
 }
 
@@ -428,7 +491,7 @@ local function MakeLangPicker(parent, frame)
         local code  = Trainfitter.GetLang()
         local lang  = Trainfitter.Lang and Trainfitter.Lang[code]
         local label = lang and (lang.label or code) or code
-        local flagW, flagH = 22, 14
+        local flagW, flagH = 24, 14
         local flagY = math.floor((h - flagH) / 2)
         PaintFlag(code, 10, flagY, flagW, flagH)
         draw.SimpleText(label, "Trainfitter.Body",
@@ -477,9 +540,9 @@ local function MakeLangPicker(parent, frame)
                     local hover = active and C.bg_active or C.bg_hover
                     local bgc = LerpColor(self2.hoverFrac, base, hover)
                     draw.RoundedBox(6, 0, 0, w, h, bgc)
-                    PaintFlag(code, 10, math.floor((h - 14) / 2), 22, 14)
+                    PaintFlag(code, 10, math.floor((h - 14) / 2), 24, 14)
                     draw.SimpleText(lang.label or code, "Trainfitter.Body",
-                        10 + 22 + 8, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+                        10 + 24 + 8, h / 2, C.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
                     if active then
                         draw.SimpleText("✓", "Trainfitter.BodyB",
                             w - 14, h / 2, C.text, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
@@ -1261,7 +1324,6 @@ local function BuildSettingsView(parent)
 
     local CLIENT_CVARS = {
         { name = "trainfitter_skins_enabled",  kind = "bool" },
-        { name = "trainfitter_gma_scan",       kind = "bool" },
         { name = "trainfitter_auto_subscribe", kind = "bool" },
     }
 

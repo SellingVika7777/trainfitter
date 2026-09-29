@@ -1,29 +1,31 @@
 -- Trainfitter - sv_trainfitter.lua
 -- Made by SellingVika
 
-if not steamworks or not isfunction(steamworks.DownloadUGC) then
-    local hasModule = isfunction(util.IsBinaryModuleInstalled)
-                  and util.IsBinaryModuleInstalled("workshop")
-    if hasModule then
-        local ok, err = pcall(require, "workshop")
-        if ok and steamworks and isfunction(steamworks.DownloadUGC) then
-            MsgC(Color(120, 220, 150),
-                "[Trainfitter] gmsv_workshop loaded - server has native steamworks.DownloadUGC.\n")
-        elseif ok then
+local function LoadWorkshopModule()
+    if steamworks and isstring(steamworks.gmsv_workshop) then return end
+    local installed = isfunction(util.IsBinaryModuleInstalled) and util.IsBinaryModuleInstalled("workshop")
+    if not installed then
+        if isfunction(game.IsDedicated) and game.IsDedicated() then
             MsgC(Color(255, 180, 80),
-                "[Trainfitter] gmsv_workshop loaded but steamworks.DownloadUGC still nil - falling back to HTTP fetch.\n")
-        else
-            MsgC(Color(255, 180, 80),
-                "[Trainfitter] require('workshop') failed: " .. tostring(err)
-                .. " - falling back to HTTP fetch.\n")
+                "[Trainfitter] gmsv_workshop is not installed - dedicated server falls back to HTTP (legacy addons only).\n" ..
+                "[Trainfitter] Put gmsv_workshop_<platform>.dll into garrysmod/lua/bin/ (see README).\n")
         end
+        return
+    end
+    local ok, err = pcall(require, "workshop")
+    if not ok then
+        MsgC(Color(255, 120, 120), "[Trainfitter] require('workshop') failed: " .. tostring(err)
+            .. " - update gmsv_workshop for this Garry's Mod version.\n")
+        return
+    end
+    if steamworks and isfunction(steamworks.DownloadUGC) then
+        MsgC(Color(120, 220, 150), "[Trainfitter] gmsv_workshop " .. tostring(steamworks.gmsv_workshop or "(legacy)")
+            .. " loaded - native Workshop downloads enabled.\n")
     else
-        MsgC(Color(255, 180, 80),
-            "[Trainfitter] gmsv_workshop binary not installed - using HTTP fetch.\n" ..
-            "[Trainfitter] For dedicated x32 srcds put gmsv_workshop_<platform>.dll into garrysmod/lua/bin/\n" ..
-            "[Trainfitter] (faster + more stable). For listen-server / x64 - HTTP is the right choice anyway.\n")
+        MsgC(Color(255, 180, 80), "[Trainfitter] gmsv_workshop loaded but cannot reach Steam - falling back to HTTP.\n")
     end
 end
+LoadWorkshopModule()
 
 local NET = Trainfitter.Net
 
@@ -38,6 +40,7 @@ Trainfitter.MountedServer     = Trainfitter.MountedServer or {}
 Trainfitter.NickCache         = Trainfitter.NickCache or {}
 Trainfitter.SkinOwnership     = Trainfitter.SkinOwnership or {}
 Trainfitter.PendingRequest    = Trainfitter.PendingRequest or {}
+Trainfitter.LoadedThisSession = Trainfitter.LoadedThisSession or {}
 Trainfitter.ActiveSkin        = Trainfitter.ActiveSkin
 
 local PERSIST_DIR     = "trainfitter"
@@ -56,6 +59,11 @@ local lastAdminGet     = {}
 local lastReportSkins  = {}
 local lastNetGlobal    = {}
 local lastMetricsReq   = {}
+local lastCollectionReq = {}
+local lastResyncReq    = {}
+local lastLogsReq      = {}
+local hourlyNew        = {}
+local auditSeen        = {}
 
 local NET_GLOBAL_COOLDOWN = 0.5
 
@@ -116,6 +124,17 @@ end
 
 local function Audit(ply, action, details)
     if not GetConVar("trainfitter_audit_log"):GetBool() then return end
+    if IsValid(ply) then
+        local key = (ply:SteamID64() or "0") .. "|" .. tostring(action)
+        local now = CurTime()
+        local rec = auditSeen[key]
+        if rec and now - rec.t < 60 then
+            rec.n = rec.n + 1
+            if rec.n > 20 then return end
+        else
+            auditSeen[key] = { t = now, n = 1 }
+        end
+    end
     EnsureDir()
 
     local sid   = IsValid(ply) and (ply:SteamID64() or "0") or "CONSOLE"
@@ -264,8 +283,19 @@ end
 local function SaveStats() WriteJSON(STATS_FILE, Trainfitter.Stats) end
 
 local statsDirty = false
+local STATS_CAP = 5000
+
+local function TrimStats()
+    local list = {}
+    for w, st in pairs(Trainfitter.Stats) do list[#list + 1] = { w = w, last = tonumber(st.last) or 0 } end
+    if #list <= STATS_CAP then return end
+    table.sort(list, function(a, b) return a.last < b.last end)
+    for i = 1, #list - STATS_CAP do Trainfitter.Stats[list[i].w] = nil end
+end
+
 local function BumpStats(wsid, title)
     if not GetConVar("trainfitter_stats_enabled"):GetBool() then return end
+    if not Trainfitter.Stats[wsid] then TrimStats() end
     local s = Trainfitter.Stats[wsid] or { count = 0, title = "", last = 0 }
     s.count = s.count + 1
     if title and title ~= "" then s.title = title end
@@ -291,22 +321,46 @@ local function ServerHasSteamworks()
        and isfunction(game.MountGMA)
 end
 
-local function ShouldUseHttp()
+local function WorkshopModuleStatus()
+    if not (steamworks and isfunction(steamworks.gmsv_workshop_status)) then return nil end
+    local ok, ready, msg = pcall(steamworks.gmsv_workshop_status)
+    if not ok then return false, tostring(ready) end
+    return ready == true, tostring(msg or "")
+end
+
+local function IsDedicated()
+    return isfunction(game.IsDedicated) and game.IsDedicated() or false
+end
+
+local function ForceHttp()
     local cv = GetConVar("trainfitter_use_http")
-    if cv and cv:GetBool() then return true end
+    return cv and cv:GetBool() or false
+end
+
+local function ShouldUseHttp()
+    if ForceHttp() then return true end
     if not ServerHasSteamworks() then return true end
-    if isfunction(game.IsDedicated) and not game.IsDedicated() then return true end
+    if not IsDedicated() then return true end
     return false
 end
 
-local GMA_CACHE_DIR = PERSIST_DIR .. "/gmas"
+local GMA_CACHE_DIR  = PERSIST_DIR .. "/gmas"
+local HTTP_CACHE_DIR = PERSIST_DIR .. "/http"
 
 local function SweepStaleGMACache()
-    if not file.IsDir(GMA_CACHE_DIR, "DATA") then return end
-    local files = file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {}
+    local files = {}
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            for _, fname in ipairs(file.Find(dir .. "/*.gma", "DATA") or {}) do
+                pcall(file.Delete, dir .. "/" .. fname)
+            end
+            for _, fname in ipairs(file.Find(dir .. "/*.dat", "DATA") or {}) do
+                files[#files + 1] = dir .. "/" .. fname
+            end
+        end
+    end
     local removed, kept = 0, 0
-    for _, fname in ipairs(files) do
-        local rel  = GMA_CACHE_DIR .. "/" .. fname
+    for _, rel in ipairs(files) do
         local size = file.Size(rel, "DATA") or 0
         local age  = os.time() - (file.Time(rel, "DATA") or 0)
         if size < 1000 or age > 30 * 24 * 3600 then
@@ -323,9 +377,33 @@ local function SweepStaleGMACache()
     end
 end
 
+local function EnforceCacheCap()
+    local cv = GetConVar("trainfitter_cache_max_gb")
+    local cap = (cv and cv:GetInt() or 20) * 1024 * 1024 * 1024
+    if cap <= 0 then return end
+    local files, total = {}, 0
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            for _, fname in ipairs(file.Find(dir .. "/*.dat", "DATA") or {}) do
+                local rel = dir .. "/" .. fname
+                local size = file.Size(rel, "DATA") or 0
+                total = total + size
+                files[#files + 1] = { rel = rel, size = size, t = file.Time(rel, "DATA") or 0 }
+            end
+        end
+    end
+    if total <= cap then return end
+    table.sort(files, function(a, b) return a.t < b.t end)
+    for _, f in ipairs(files) do
+        if total <= cap then break end
+        file.Delete(f.rel)
+        if not file.Exists(f.rel, "DATA") then total = total - f.size end
+    end
+end
+
 local function InvalidateGMACache(wsid)
     if not isstring(wsid) or wsid == "" then return end
-    local cacheFile = GMA_CACHE_DIR .. "/" .. wsid .. ".gma"
+    local cacheFile = HTTP_CACHE_DIR .. "/" .. wsid .. ".dat"
     if file.Exists(cacheFile, "DATA") then
         pcall(file.Delete, cacheFile)
         MsgC(Color(255, 200, 120),
@@ -353,9 +431,9 @@ local function HttpFetchGMA(wsid, callback)
         return
     end
     if not file.IsDir(PERSIST_DIR, "DATA") then file.CreateDir(PERSIST_DIR) end
-    if not file.IsDir(GMA_CACHE_DIR, "DATA") then file.CreateDir(GMA_CACHE_DIR) end
+    if not file.IsDir(HTTP_CACHE_DIR, "DATA") then file.CreateDir(HTTP_CACHE_DIR) end
 
-    local cacheFile = GMA_CACHE_DIR .. "/" .. wsid .. ".gma"
+    local cacheFile = HTTP_CACHE_DIR .. "/" .. wsid .. ".dat"
     local cacheAbs  = "data/" .. cacheFile
 
     if file.Exists(cacheFile, "DATA") and (file.Size(cacheFile, "DATA") or 0) > 1000 then
@@ -369,9 +447,23 @@ local function HttpFetchGMA(wsid, callback)
             return
         end
 
-        if isstring(info.file_url) and info.file_url ~= "" then
+        local url = isstring(info.file_url) and info.file_url or ""
+        local host = string.match(url, "^https://([%w%.%-]+)/") or ""
+        local trustedHost = host == "steamusercontent-a.akamaihd.net" or string.match(host, "%.steamusercontent%.com$")
+            or host == "steamusercontent.com" or string.match(host, "%.steamcontent%.com$")
+            or string.match(host, "%.steamstatic%.com$")
+        if url ~= "" and not trustedHost then
+            callback(nil, "Workshop returned an unexpected download host")
+            return
+        end
+
+        if url ~= "" then
             local maxBytes = (GetConVar("trainfitter_max_mb"):GetInt() or 200) * 1024 * 1024
-            http.Fetch(info.file_url, function(gmaBody)
+            http.Fetch(url, function(gmaBody, _, _, code)
+                if code and code >= 400 then
+                    callback(nil, "HTTP " .. tostring(code))
+                    return
+                end
                 if not gmaBody or #gmaBody < 1000 then
                     callback(nil, "GMA body too small")
                     return
@@ -385,7 +477,10 @@ local function HttpFetchGMA(wsid, callback)
                     callback(nil, "downloaded payload is not a GMA")
                     return
                 end
-                file.Write(cacheFile, gmaBody)
+                if file.Write(cacheFile, gmaBody) == false or not file.Exists(cacheFile, "DATA") then
+                    callback(nil, "cannot write " .. cacheFile)
+                    return
+                end
                 MsgC(Color(120, 220, 150), string.format(
                     "[Trainfitter] HTTP-fetched GMA: %s (%.1f MB)\n",
                     wsid, #gmaBody / 1024 / 1024))
@@ -402,225 +497,64 @@ local function HttpFetchGMA(wsid, callback)
             return
         end
 
-        if steamworks and isfunction(steamworks.Subscribe) then
-            MsgC(Color(180, 220, 255), string.format(
-                "[Trainfitter] No file_url and not subscribed yet. "
-                .. "Asking Steam to subscribe %s and waiting for the download…\n", wsid))
-            pcall(steamworks.Subscribe, wsid)
-
-            local timerName = "trainfitter_sub_wait_" .. wsid
-            if timer.Exists(timerName) then timer.Remove(timerName) end
-            local elapsed   = 0
-            local maxWait   = 60
-            timer.Create(timerName, 1, maxWait, function()
-                elapsed = elapsed + 1
-                local p = FindSubscribedAddonPath(wsid)
-                if p then
-                    timer.Remove(timerName)
-                    MsgC(Color(120, 220, 150),
-                        "[Trainfitter] Steam finished subscription for " .. wsid
-                        .. " (after " .. elapsed .. "s): " .. p .. "\n")
-                    callback(p)
-                elseif elapsed >= maxWait then
-                    timer.Remove(timerName)
-                    callback(nil, "subscribe + wait timed out after " .. maxWait .. "s")
-                end
-            end)
-            return
-        end
-
         callback(nil,
-            "no file_url in Steam response and item not subscribed in Steam. "
-            .. "Workaround: open the addon page (browser) and click Subscribe, then retry. "
-            .. "On dedicated server install gmsv_workshop and trainfitter_use_http 0.")
+            "this Workshop item has no public download URL. Install gmsv_workshop on the dedicated server "
+            .. "(garrysmod/lua/bin) or subscribe to it with the listen-server host account.")
     end)
 end
 
-local function SnapshotMetrostroiTable(t)
-    local snap = {}
-    if not istable(t) then return snap end
-    for category, bucket in pairs(t) do
-        if istable(bucket) then
-            snap[category] = {}
-            for n in pairs(bucket) do snap[category][n] = true end
-        end
+local hostFetchWaiters = {}
+
+local function ListenHost()
+    if IsDedicated() then return nil end
+    for _, p in ipairs(player.GetHumans()) do
+        if p:IsListenServerHost() then return p end
     end
-    return snap
+    return nil
 end
 
-local function ServerExecuteSkinFiles(files, wsid, luaBodies, fullLua)
-    if not istable(files) then return 0 end
-    if not istable(luaBodies) then luaBodies = nil end
-    local beforeSkins = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Skins) or {}
-    local beforeMasks = Metrostroi and SnapshotMetrostroiTable(Metrostroi.Masks) or {}
-
-    fullLua = fullLua == true
-
-    local initiatorSid = "?"
-    local pend = Trainfitter.PendingRequest and Trainfitter.PendingRequest[wsid]
-    if istable(pend) and pend.initiatorSid then initiatorSid = pend.initiatorSid end
-
-    if fullLua then
-        MsgC(Color(255, 200, 100),
-            "[Trainfitter] full-lua mode ACTIVE for " .. tostring(wsid) ..
-            " - addon lua will run UNSANDBOXED with full server permissions\n")
-        if Audit then
-            pcall(Audit, nil, "fulllua_active",
-                tostring(wsid) .. " initiator=" .. tostring(initiatorSid))
-        end
-    end
-
-    local function readBody(fp)
-        local c = luaBodies and luaBodies[string.lower(fp)] or nil
-        if not isstring(c) or #c == 0 then
-            c = file.Read(fp, "GAME")
-        end
-        if not isstring(c) or #c == 0 then return nil end
-        return c
-    end
-
-    local function execFile(fp, kind)
-        local c = readBody(fp)
-        if not c then return false end
-
-        local pre, preErr = (kind == "mask")
-            and Trainfitter.ValidateMaskLua(c, fp)
-            or  Trainfitter.ValidateSkinLua(c, fp)
-        if not pre then
-            MsgC(Color(255, 120, 120),
-                "[Trainfitter] Refused lua file (preflight): "
-                .. tostring(preErr) .. "\n")
-            if Audit then
-                pcall(Audit, nil, "lua_preflight_rejected", tostring(preErr))
-            end
-            return false
-        end
-
-        local ok, err = Trainfitter.ExecSandboxed(c, fp, kind)
-        if not ok then
-            MsgC(Color(255, 120, 120),
-                "[Trainfitter] Sandboxed exec failed for "
-                .. tostring(wsid) .. " :: " .. fp .. ": " .. tostring(err) .. "\n")
-            if Audit then
-                pcall(Audit, nil, "lua_sandbox_failed", tostring(wsid) .. " :: " .. fp .. " :: " .. tostring(err))
-            end
-            return false
-        end
-        return true
-    end
-
-    local function execFileUnsandboxed(fp)
-        local c = readBody(fp)
-        if not c then return false end
-
-        if Trainfitter.ShouldRejectBytecode and Trainfitter.ShouldRejectBytecode()
-           and string.byte(c, 1) == 0x1B then
-            MsgC(Color(255, 120, 120),
-                "[Trainfitter] Refused (bytecode, set trainfitter_reject_bytecode 0 to allow): " .. fp .. "\n")
-            return false
-        end
-
-        local fn, compileErr = CompileString(c, fp, false)
-        if isstring(fn) then
-            MsgC(Color(255, 120, 120),
-                "[Trainfitter] Compile failed for " .. fp .. ": " .. fn .. "\n")
-            return false
-        end
-        if not isfunction(fn) then return false end
-
-        if Audit then
-            pcall(Audit, nil, "fulllua_exec",
-                tostring(wsid) .. " :: " .. fp .. " :: initiator=" .. tostring(initiatorSid))
-        end
-
-        local ok, runErr = pcall(fn)
-        if not ok then
-            MsgC(Color(255, 180, 80),
-                "[Trainfitter] Unsandboxed exec error in " .. tostring(wsid) .. " :: " .. fp .. ": " .. tostring(runErr) .. "\n")
-            if Audit then
-                pcall(Audit, nil, "lua_fulllua_runtime_error",
-                    tostring(wsid) .. " :: " .. fp .. " :: " .. tostring(runErr))
-            end
-            return false
-        end
-        return true
-    end
-
-    local hooksBefore = {}
-    do
-        local t = hook.GetTable()["InitPostEntity"]
-        if istable(t) then for n in pairs(t) do hooksBefore[n] = true end end
-    end
-
-    local executed = 0
-    for _, fpath in ipairs(files) do
-        if isstring(fpath) and string.sub(string.lower(fpath), -4) == ".lua" then
-            local low = string.lower(fpath)
-            local rel = string.sub(low, 5)
-            if string.sub(low, 1, 21) == "lua/metrostroi/skins/" then
-                if execFile(fpath, "skin") then executed = executed + 1 end
-                pcall(AddCSLuaFile, rel)
-            elseif fullLua then
-                if execFileUnsandboxed(fpath) then executed = executed + 1 end
-                pcall(AddCSLuaFile, rel)
-            end
-        end
-    end
-
-    do
-        local t = hook.GetTable()["InitPostEntity"]
-        if istable(t) then
-            for name, fn in pairs(t) do
-                if not hooksBefore[name] and isfunction(fn) then
-                    local ok, err = pcall(fn)
-                    if not ok then
-                        MsgC(Color(255, 180, 80), string.format(
-                            "[Trainfitter] Late-fire InitPostEntity hook '%s' from %s failed: %s\n",
-                            tostring(name), tostring(wsid), tostring(err)))
-                    end
-                end
-            end
-        end
-    end
-
-    local function diffInto(currentTbl, beforeTbl, owned, seen, kind)
-        if not istable(currentTbl) then return end
-        for category, bucket in pairs(currentTbl) do
-            if istable(bucket) then
-                for name, data in pairs(bucket) do
-                    local wasBefore = beforeTbl[category] and beforeTbl[category][name]
-                    local key = kind .. "|" .. category .. "|" .. name
-                    if not wasBefore and not seen[key] then
-                        seen[key] = true
-                        local typ = (istable(data) and data.typ) or ""
-                        table.insert(owned, {
-                            kind     = kind,
-                            category = category,
-                            name     = name,
-                            typ      = typ,
-                        })
-                    end
-                end
-            end
-        end
-    end
-
-    if Metrostroi then
-        local owned = Trainfitter.SkinOwnership[wsid] or {}
-        local seen = {}
-        for _, e in ipairs(owned) do
-            seen[(e.kind or "skin") .. "|" .. e.category .. "|" .. e.name] = true
-        end
-        diffInto(Metrostroi.Skins, beforeSkins, owned, seen, "skin")
-        diffInto(Metrostroi.Masks, beforeMasks, owned, seen, "mask")
-        Trainfitter.SkinOwnership[wsid] = owned
-    end
-
-    return executed
+local function HostFetchGMA(wsid, callback)
+    local host = ListenHost()
+    if not IsValid(host) then callback(nil, "no listen-server host") return end
+    hostFetchWaiters[wsid] = hostFetchWaiters[wsid] or {}
+    table.insert(hostFetchWaiters[wsid], callback)
+    if #hostFetchWaiters[wsid] > 1 then return end
+    net.Start(NET.HostFetch)
+    net.WriteString(wsid)
+    net.Send(host)
+    timer.Create("Trainfitter.HostFetch." .. wsid, 150, 1, function()
+        local waiters = hostFetchWaiters[wsid]
+        hostFetchWaiters[wsid] = nil
+        for _, cb in ipairs(waiters or {}) do cb(nil, "host download timed out") end
+    end)
 end
+
+local function ValidHostPath(p)
+    if not isstring(p) or p == "" or #p > 260 then return false end
+    if string.find(p, "..", 1, true) or string.find(p, ":", 1, true) or string.find(p, "\0", 1, true) then return false end
+    local first = string.sub(p, 1, 1)
+    if first == "/" or first == "\\" then return false end
+    return file.Exists(p, "GAME")
+end
+
+net.Receive(NET.HostFetched, function(len, ply)
+    if len > 512 * 8 then return end
+    if not IsValid(ply) or not ply:IsListenServerHost() then return end
+    local wsid = net.ReadString()
+    local path = net.ReadString()
+    local waiters = hostFetchWaiters[wsid]
+    if not waiters then return end
+    hostFetchWaiters[wsid] = nil
+    timer.Remove("Trainfitter.HostFetch." .. wsid)
+    local ok = ValidHostPath(path)
+    for _, cb in ipairs(waiters) do
+        if ok then cb(path) else cb(nil, "host returned no usable path") end
+    end
+end)
 
 local serverMountQueue    = {}
 local serverMountInFlight = false
+local processServerMountQueue
 
 local function finalize(wsid, ok, reason)
     if Trainfitter.FinalizePending then
@@ -628,73 +562,114 @@ local function finalize(wsid, ok, reason)
     end
 end
 
+local function RecordOwnership(wsid, owned)
+    local list = Trainfitter.SkinOwnership[wsid] or {}
+    local seen = {}
+    for _, e in ipairs(list) do seen[(e.kind or "skin") .. "|" .. e.category .. "|" .. e.name] = true end
+    for _, e in ipairs(owned or {}) do
+        local key = e.kind .. "|" .. e.category .. "|" .. e.name
+        if not seen[key] then
+            seen[key] = true
+            list[#list + 1] = { kind = e.kind, category = e.category, name = e.name, typ = e.typ }
+        end
+    end
+    Trainfitter.SkinOwnership[wsid] = list
+end
+
+local function MountAndRun(wsid, report, mountPath, fullLua)
+    local ok, files = game.MountGMA(mountPath)
+    if not ok then return false, "MountGMA failed" end
+    Trainfitter.MountedServer[wsid] = true
+    Trainfitter.LoadedThisSession[wsid] = true
+    local summary = Trainfitter.RunAddonLua(wsid, report, {
+        allowMasks = Trainfitter.ShouldAllowMasks(),
+        mel = Trainfitter.MELSupportEnabled(),
+        unsafe = fullLua,
+    })
+    RecordOwnership(wsid, summary.owned)
+    MsgC(Color(120, 220, 150), string.format(
+        "[Trainfitter] Server mounted %s: %d files, %d script(s) in sandbox\n",
+        wsid, istable(files) and #files or 0, summary.executed))
+    if summary.failed > 0 then
+        pcall(Audit, nil, "sandbox_errors", wsid .. " :: " .. table.concat(summary.errors, " | "))
+    end
+    return true
+end
+
 local function onGMAReady(wsid, path)
-    if not path then
-        finalize(wsid, false, "download failed")
+    local function release()
         serverMountInFlight = false
         processServerMountQueue()
+    end
+
+    if not path then
+        finalize(wsid, false, "download failed")
+        release()
         return
     end
 
-    local fullLuaForThis = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
-
-    local scanBodies = nil
-    if Trainfitter.ScanGMA and Trainfitter.ShouldScanGMA and Trainfitter.ShouldScanGMA() then
-        local callOK, safe, reason, _sf, bodies = pcall(Trainfitter.ScanGMA, path, fullLuaForThis)
-        scanBodies = bodies
-        if not callOK then
-            MsgC(Color(255, 120, 120), string.format(
-                "[Trainfitter] Scanner crashed on %s: %s - REFUSING mount.\n",
-                wsid, tostring(safe)))
-            if Audit then
-                pcall(Audit, nil, "scanner_crashed_refused",
-                    wsid .. " :: " .. tostring(safe))
-            end
-            InvalidateGMACache(wsid)
-            finalize(wsid, false, "scanner crashed: " .. tostring(safe))
-            serverMountInFlight = false
-            processServerMountQueue()
-            return
-        elseif not safe then
-            MsgC(Color(255, 120, 120), string.format(
-                "[Trainfitter] Server refused to mount %s: %s\n",
-                wsid, tostring(reason)))
-            if Audit then
-                pcall(Audit, nil, "server_mount_rejected",
-                    wsid .. " :: " .. tostring(reason))
-            end
-            InvalidateGMACache(wsid)
-            finalize(wsid, false, tostring(reason))
-            serverMountInFlight = false
-            processServerMountQueue()
-            return
+    local fullLua = Trainfitter.ShouldAllowFullLua() and Trainfitter.Whitelist[wsid] == true
+    local callOK, report = pcall(Trainfitter.ScanGMA, path, {
+        fullLua = fullLua,
+        allowMasks = Trainfitter.ShouldAllowMasks(),
+    })
+    local reject
+    if not callOK then
+        reject = "scanner crashed: " .. tostring(report)
+    elseif not report.ok then
+        reject = tostring(report.reason)
+    elseif report.usesMEL and not Trainfitter.MELSupportEnabled() then
+        reject = "addon requires Metrostroi Extensions Library (MEL); enable 'trainfitter_mel_support 1' if this server runs MEL"
+    elseif report.usesMEL and not Trainfitter.MELPresent() then
+        reject = "addon requires Metrostroi Extensions Library (MEL), but MEL is not installed on this server"
+    elseif report.hasLua and not fullLua and not Trainfitter.Sandbox.Available then
+        reject = "sandbox unavailable on this server (debug.sethook missing)"
+    else
+        local maxMB = math.max(GetConVar("trainfitter_max_mb"):GetInt(), 64)
+        if report.totalBytes > maxMB * 4 * 1024 * 1024 then
+            reject = string.format("addon unpacks to %d MB, more than 4x the %d MB limit", math.floor(report.totalBytes / 1048576), maxMB)
         end
     end
 
-    local mountOK, mountErr = pcall(function()
-        local ok, files = game.MountGMA(path)
-        if ok and istable(files) then
-            Trainfitter.MountedServer[wsid] = true
-            local executed = ServerExecuteSkinFiles(files, wsid, scanBodies, fullLuaForThis)
-            MsgC(Color(120, 220, 150), string.format(
-                "[Trainfitter] Server mounted %s: %d skin scripts executed\n",
-                wsid, executed))
-            finalize(wsid, true)
+    if reject then
+        MsgC(Color(255, 120, 120), string.format("[Trainfitter] Server refused to mount %s: %s\n", wsid, reject))
+        pcall(Audit, nil, "server_mount_rejected", wsid .. " :: " .. reject)
+        InvalidateGMACache(wsid)
+        finalize(wsid, false, reject)
+        release()
+        return
+    end
+
+    local function run(mountPath)
+        local ok, res, err = pcall(MountAndRun, wsid, report, mountPath, fullLua)
+        if not ok then
+            MsgC(Color(255, 120, 120), string.format("[Trainfitter] mount/exec threw for %s: %s\n", wsid, tostring(res)))
+            pcall(Audit, nil, "mount_exec_threw", wsid .. " :: " .. tostring(res))
+            finalize(wsid, false, "mount/exec error")
+        elseif not res then
+            InvalidateGMACache(wsid)
+            finalize(wsid, false, err or "mount failed")
         else
-            MsgC(Color(255, 120, 120), string.format(
-                "[Trainfitter] MountGMA failed for %s\n", wsid))
-            InvalidateGMACache(wsid)
-            finalize(wsid, false, "MountGMA failed")
+            finalize(wsid, true)
         end
-    end)
-    if not mountOK then
-        MsgC(Color(255, 120, 120), string.format(
-            "[Trainfitter] mount/exec threw for %s: %s\n", wsid, tostring(mountErr)))
-        if Audit then pcall(Audit, nil, "mount_exec_threw", wsid .. " :: " .. tostring(mountErr)) end
-        finalize(wsid, false, "mount/exec error")
+        release()
     end
-    serverMountInFlight = false
-    processServerMountQueue()
+
+    if fullLua or not report.hasLua then
+        run(path)
+        return
+    end
+
+    Trainfitter.RepackGMA(path, report, wsid, function(cleanPath, err)
+        if not cleanPath then
+            MsgC(Color(255, 120, 120), string.format("[Trainfitter] Repack failed for %s: %s\n", wsid, tostring(err)))
+            finalize(wsid, false, "repack failed: " .. tostring(err))
+            release()
+            return
+        end
+        pcall(EnforceCacheCap)
+        run(cleanPath)
+    end)
 end
 
 local function safeNativeDownload(wsid, cb)
@@ -711,12 +686,14 @@ local function safeNativeDownload(wsid, cb)
     end)
 end
 
-local SERVER_MOUNT_TIMEOUT = 90
+local SERVER_MOUNT_TIMEOUT = 900
 
 function processServerMountQueue()
     if serverMountInFlight or #serverMountQueue == 0 then return end
     local wsid = table.remove(serverMountQueue, 1)
-    if Trainfitter.MountedServer[wsid] then
+    if Trainfitter.LoadedThisSession[wsid] then
+        Trainfitter.MountedServer[wsid] = true
+        finalize(wsid, true)
         processServerMountQueue()
         return
     end
@@ -743,7 +720,7 @@ function processServerMountQueue()
         onGMAReady(wsid, path)
     end
 
-    if ShouldUseHttp() then
+    local function viaHttp()
         HttpFetchGMA(wsid, function(path, err)
             if not path and err then
                 MsgC(Color(255, 120, 120), string.format(
@@ -751,6 +728,22 @@ function processServerMountQueue()
             end
             done(path)
         end)
+    end
+
+    if ShouldUseHttp() then
+        if not ForceHttp() and not IsDedicated() and IsValid(ListenHost()) then
+            HostFetchGMA(wsid, function(path, err)
+                if path then
+                    done(path)
+                else
+                    MsgC(Color(255, 180, 80), string.format(
+                        "[Trainfitter] Host download of %s failed (%s), trying HTTP\n", wsid, tostring(err)))
+                    viaHttp()
+                end
+            end)
+        else
+            viaHttp()
+        end
     else
         safeNativeDownload(wsid, function(path)
             done(path)
@@ -763,7 +756,10 @@ local MAX_SERVER_QUEUE = 64
 local function ServerMount(wsid)
     if not IsValidWSID(wsid) then return end
     if not isfunction(game.MountGMA) then return end
-    if Trainfitter.MountedServer[wsid] then return end
+    if Trainfitter.LoadedThisSession[wsid] then
+        Trainfitter.MountedServer[wsid] = true
+        return
+    end
     for _, q in ipairs(serverMountQueue) do
         if q == wsid then return end
     end
@@ -799,6 +795,20 @@ local function SendPersistentList(target)
 end
 
 
+local function IsTrustedFull(wsid)
+    return Trainfitter.ShouldAllowFullLua() and Trainfitter.Whitelist[wsid] == true
+end
+
+local function WriteBroadcast(wsid, initiatorName, title, sizeMB, initiatorSid)
+    net.Start(NET.Broadcast)
+    net.WriteString(wsid)
+    net.WriteString(initiatorName or "")
+    net.WriteString(title or "")
+    net.WriteFloat(sizeMB or 0)
+    net.WriteString(initiatorSid or "")
+    net.WriteBool(IsTrustedFull(wsid))
+end
+
 local function BroadcastDownload(wsid, initiatorName, title, sizeMB, initiatorSid)
     Trainfitter.SessionBroadcast[wsid] = {
         title         = title or "",
@@ -807,13 +817,7 @@ local function BroadcastDownload(wsid, initiatorName, title, sizeMB, initiatorSi
         initiatorSid  = initiatorSid or "",
         initiatorName = initiatorName or "",
     }
-
-    net.Start(NET.Broadcast)
-    net.WriteString(wsid)
-    net.WriteString(initiatorName or "")
-    net.WriteString(title or "")
-    net.WriteFloat(sizeMB or 0)
-    net.WriteString(initiatorSid or "")
+    WriteBroadcast(wsid, initiatorName, title, sizeMB, initiatorSid)
     net.Broadcast()
 end
 
@@ -851,7 +855,7 @@ local function ResetTrainsForOwnedSkins(owned)
     return reset
 end
 
-function BroadcastForget(wsid, initiatorSid)
+local function BroadcastForget(wsid, initiatorSid)
     if not wsid or wsid == "" then return end
     Trainfitter.SessionBroadcast[wsid] = nil
     Trainfitter.MountedServer[wsid] = nil
@@ -975,6 +979,27 @@ local function CountLoadedBy(sid)
     return n
 end
 
+local function SessionLoadedCount()
+    local n = 0
+    for _ in pairs(Trainfitter.LoadedThisSession) do n = n + 1 end
+    return n
+end
+
+local function HourlyUsed(sid)
+    local rec = hourlyNew[sid]
+    if not rec or os.time() - rec.t >= 3600 then return 0 end
+    return rec.n
+end
+
+local function HourlyBump(sid)
+    local rec = hourlyNew[sid]
+    if not rec or os.time() - rec.t >= 3600 then
+        hourlyNew[sid] = { t = os.time(), n = 1 }
+    else
+        rec.n = rec.n + 1
+    end
+end
+
 local function HandleRequest(ply, wsid, makePersistent, skipCooldown)
     if not IsValid(ply) then return end
 
@@ -983,6 +1008,15 @@ local function HandleRequest(ply, wsid, makePersistent, skipCooldown)
         return
     end
 
+    local sid = ply:SteamID64() or "0"
+    local now = CurTime()
+    local cd  = math.max(GetConVar("trainfitter_request_cooldown"):GetFloat(), 1)
+    if not skipCooldown and lastRequest[sid] and (now - lastRequest[sid]) < cd then
+        Notify(ply, "[Trainfitter] Slow down, take a breath",
+            Color(255, 180, 80))
+        return
+    end
+    lastRequest[sid] = now
 
     if not Trainfitter.CanDownload(ply) then
         Notify(ply, "[Trainfitter] Not enough perms to download, sorry kid", Color(255, 100, 100))
@@ -996,16 +1030,21 @@ local function HandleRequest(ply, wsid, makePersistent, skipCooldown)
         return
     end
 
-    local sid = ply:SteamID64() or "0"
-    local now = CurTime()
-    local cd  = GetConVar("trainfitter_request_cooldown"):GetFloat()
-    if not skipCooldown and lastRequest[sid] and (now - lastRequest[sid]) < cd then
-        Notify(ply, "[Trainfitter] Slow down, take a breath",
-            Color(255, 180, 80))
-        return
+    local isNewAddon = not Trainfitter.LoadedThisSession[wsid]
+    local privileged = Trainfitter.CanMakePersistent(ply)
+    if isNewAddon and not privileged then
+        local sessionCap = CapOf("trainfitter_max_session_addons")
+        if SessionLoadedCount() >= sessionCap then
+            Notify(ply, "[Trainfitter] This map session already loaded its maximum of addons, ask an admin", Color(255, 100, 100))
+            Audit(ply, "session_cap", wsid)
+            return
+        end
+        if HourlyUsed(sid) >= CapOf("trainfitter_max_new_per_hour") then
+            Notify(ply, "[Trainfitter] You reached your hourly limit of new addons, try later", Color(255, 100, 100))
+            Audit(ply, "hourly_cap", wsid)
+            return
+        end
     end
-
-    lastRequest[sid] = now
 
     local hookret = hook.Run("Trainfitter.CanRequest", ply, wsid, makePersistent)
     if hookret == false then
@@ -1062,30 +1101,59 @@ local function HandleRequest(ply, wsid, makePersistent, skipCooldown)
             return
         end
 
-        local extra = sizeMB / 10
-        lastRequest[sid] = CurTime() + extra
+        local title = info.title
+        local function proceed()
+            local extra = sizeMB / 10
+            lastRequest[sid] = CurTime() + extra
 
-        Trainfitter.PendingRequest[wsid] = {
-            initiatorSid    = sid,
-            initiatorName   = SafeNick(ply),
-            title           = Sanitize(info.title or "", 128),
-            sizeMB          = sizeMB,
-            makePersistent  = makePersistent,
-            adminTier       = adminTier,
-            since           = os.time(),
-        }
+            Trainfitter.PendingRequest[wsid] = {
+                initiatorSid    = sid,
+                initiatorName   = SafeNick(ply),
+                title           = Sanitize(info.title or "", 128),
+                sizeMB          = sizeMB,
+                makePersistent  = makePersistent,
+                adminTier       = adminTier,
+                since           = os.time(),
+            }
 
-        Notify(ply, string.format(
-            "[Trainfitter] X-raying '%s' on server (%.1f MB)",
-            info.title, sizeMB), Color(150, 220, 255))
-        Audit(ply, "download_requested",
-            string.format("%s '%s' (%.1f MB)", wsid, info.title, sizeMB))
+            if not Trainfitter.LoadedThisSession[wsid] and not privileged then HourlyBump(sid) end
 
-        if Trainfitter.MountedServer[wsid] then
-            finalize(wsid, true)
-        else
-            ServerMount(wsid)
+            Notify(ply, string.format(
+                "[Trainfitter] X-raying '%s' on server (%.1f MB)",
+                info.title, sizeMB), Color(150, 220, 255))
+            Audit(ply, "download_requested",
+                string.format("%s '%s' (%.1f MB)", wsid, info.title, sizeMB))
+
+            if Trainfitter.LoadedThisSession[wsid] then
+                Trainfitter.MountedServer[wsid] = true
+                finalize(wsid, true)
+            else
+                ServerMount(wsid)
+            end
         end
+
+        Trainfitter.FetchRequiredItems(wsid, function(deps)
+            if not IsValid(ply) then return end
+            local needsMEL = false
+            for _, d in ipairs(deps or {}) do
+                if d == Trainfitter.MEL_WSID then needsMEL = true end
+            end
+            if needsMEL and not Trainfitter.MELSupportEnabled() then
+                Notify(ply, string.format(
+                    "[Trainfitter] '%s' requires Metrostroi Extensions Library (MEL), MEL support is off on this server",
+                    title), Color(255, 100, 100))
+                Audit(ply, "request_rejected", wsid .. " (requires MEL, support disabled)")
+                return
+            end
+            if needsMEL and not Trainfitter.MELPresent() then
+                Notify(ply, string.format(
+                    "[Trainfitter] '%s' requires Metrostroi Extensions Library (MEL), but MEL is not installed here",
+                    title), Color(255, 100, 100))
+                Audit(ply, "request_rejected", wsid .. " (requires MEL, MEL missing)")
+                return
+            end
+            proceed()
+        end)
     end)
 end
 
@@ -1190,7 +1258,6 @@ net.Receive(NET.Request, function(len, ply)
     HandleRequest(ply, wsid, persist)
 end)
 
-local lastCollectionReq = {}
 local COLLECTION_COOLDOWN = 10
 
 net.Receive(NET.RequestCollection, function(len, ply)
@@ -1275,6 +1342,7 @@ net.Receive(NET.RequestCollection, function(len, ply)
 end)
 
 net.Receive(NET.RemovePersistent, function(len, ply)
+    if NetGlobalThrottled(ply) then return end
     if len > 128 * 8 then
         Audit(ply, "netspam_rejected", "NET.RemovePersistent len=" .. len)
         return
@@ -1317,12 +1385,31 @@ local function BuildServerIssues()
         })
     end
 
-    local isDedicated = isfunction(game.IsDedicated) and game.IsDedicated() or false
+    local isDedicated = IsDedicated()
     if not ServerHasSteamworks() and isDedicated then
         table.insert(issues, {
             severity = "warn",
-            msg = "gmsv_workshop not installed on dedicated server. HTTP fallback is active (slower). For best performance install gmsv_workshop_<platform>.dll into garrysmod/lua/bin/.",
+            msg = "gmsv_workshop is not installed on this dedicated server - only legacy Workshop items can be downloaded. Install gmsv_workshop into garrysmod/lua/bin/.",
         })
+    end
+    local wsReady, wsMsg = WorkshopModuleStatus()
+    if wsReady == false and isDedicated then
+        table.insert(issues, { severity = "warn", msg = "gmsv_workshop is loaded but not ready: " .. tostring(wsMsg) })
+    end
+    if Trainfitter.MELPresent() and not Trainfitter.MELSupportEnabled() then
+        table.insert(issues, {
+            severity = "warn",
+            msg = "Metrostroi Extensions Library (MEL) is installed, but MEL support is off - addons that require MEL will be rejected.",
+        })
+    end
+    if Trainfitter.MELSupportEnabled() and not Trainfitter.MELPresent() then
+        table.insert(issues, {
+            severity = "error",
+            msg = "MEL support is on, but Metrostroi Extensions Library is not installed on the server.",
+        })
+    end
+    if not Trainfitter.Sandbox.Available then
+        table.insert(issues, { severity = "error", msg = "Lua sandbox is unavailable, masks cannot be loaded." })
     end
 
     return issues
@@ -1334,6 +1421,7 @@ net.Receive(NET.GetServerStatus, function(_, ply)
     local now = CurTime()
     if lastStatusReq[sid] and (now - lastStatusReq[sid]) < 5 then return end
     lastStatusReq[sid] = now
+    if not Trainfitter.CanManage(ply) then return end
 
     local issues = BuildServerIssues()
     net.Start(NET.ServerStatus)
@@ -1446,6 +1534,11 @@ local function PruneSessionState()
     end
     for sid in pairs(lastNetGlobal) do if not onlineSids[sid] then lastNetGlobal[sid] = nil; removed = removed + 1 end end
     for sid in pairs(lastMetricsReq) do if not onlineSids[sid] then lastMetricsReq[sid] = nil; removed = removed + 1 end end
+    for _, t in ipairs({ lastCollectionReq, lastResyncReq, lastLogsReq }) do
+        for sid in pairs(t) do if not onlineSids[sid] then t[sid] = nil; removed = removed + 1 end end
+    end
+    for sid, rec in pairs(hourlyNew) do if os.time() - rec.t >= 3600 then hourlyNew[sid] = nil end end
+    for key, rec in pairs(auditSeen) do if CurTime() - rec.t >= 60 then auditSeen[key] = nil end end
 
     local NICK_CACHE_CAP = 4096
     local nickCount = 0
@@ -1530,6 +1623,7 @@ net.Receive(NET.ReportSkins, function(len, ply)
 end)
 
 net.Receive(NET.DeleteSkin, function(len, ply)
+    if NetGlobalThrottled(ply) then return end
     if len > 128 * 8 then
         Audit(ply, "netspam_rejected", "NET.DeleteSkin len=" .. len)
         return
@@ -1560,13 +1654,18 @@ net.Receive(NET.DeleteSkin, function(len, ply)
         return
     end
 
-    for i = #Trainfitter.Persistent, 1, -1 do
-        if Trainfitter.Persistent[i] == wsid then
-            table.remove(Trainfitter.Persistent, i)
+    if isAdmin then
+        for i = #Trainfitter.Persistent, 1, -1 do
+            if Trainfitter.Persistent[i] == wsid then
+                table.remove(Trainfitter.Persistent, i)
+            end
         end
+        SavePersistent()
+        SendPersistentList()
+    elseif IsPersistentWsid(wsid) then
+        Notify(ply, "[Trainfitter] This addon is a server favorite, only admins can remove it", Color(255, 100, 100))
+        return
     end
-    SavePersistent()
-    SendPersistentList()
 
     if Trainfitter.ActiveSkin and Trainfitter.ActiveSkin.wsid == wsid then
         Trainfitter.ActiveSkin = nil
@@ -1592,7 +1691,6 @@ net.Receive(NET.RequestList, function(_, ply)
     SendPersistentList(ply)
 end)
 
-local lastResyncReq = {}
 
 net.Receive(NET.ResyncSkins, function(_, ply)
     if not IsValid(ply) then return end
@@ -1605,12 +1703,7 @@ net.Receive(NET.ResyncSkins, function(_, ply)
     SendActiveSkin(ply)
     for wsid, info in pairs(Trainfitter.SessionBroadcast) do
         if istable(info) then
-            net.Start(NET.Broadcast)
-            net.WriteString(wsid)
-            net.WriteString("")
-            net.WriteString(info.title or "")
-            net.WriteFloat(info.sizeMB or 0)
-            net.WriteString(info.initiatorSid or "")
+            WriteBroadcast(wsid, "", info.title, info.sizeMB, info.initiatorSid)
             net.Send(ply)
         end
     end
@@ -1629,8 +1722,13 @@ local ADMIN_CVARS = {
     { name = "trainfitter_stats_enabled",        kind = "bool" },
     { name = "trainfitter_server_premount",      kind = "bool" },
     { name = "trainfitter_use_http",             kind = "bool" },
+    { name = "trainfitter_max_session_addons",   kind = "int",  min = 0, max = 1000 },
+    { name = "trainfitter_max_new_per_hour",     kind = "int",  min = 0, max = 1000 },
+    { name = "trainfitter_cache_max_gb",         kind = "int",  min = 0, max = 1000 },
+    { name = "trainfitter_allow_masks",          kind = "bool" },
+    { name = "trainfitter_mel_support",          kind = "bool" },
     { name = "trainfitter_allow_full_lua",       kind = "bool" },
-    { name = "trainfitter_max_lua_kb",           kind = "int",  min = 1, max = 1024 },
+    { name = "trainfitter_max_lua_kb",           kind = "int",  min = 1, max = 4096 },
     { name = "trainfitter_sandbox_instr_m",      kind = "int",  min = 1, max = 10000 },
     { name = "trainfitter_reject_bytecode",      kind = "bool" },
     { name = "trainfitter_allow_collections",    kind = "bool" },
@@ -1679,14 +1777,14 @@ end
 
 net.Receive(NET.AdminGetConfig, function(_, ply)
     if not IsValid(ply) then return end
-    if not (Trainfitter.CanManage(ply) or Trainfitter.CanViewLogs(ply)) then
-        Audit(ply, "admin_get_no_perm", "")
-        return
-    end
     local sid = ply:SteamID64() or "0"
     local now = CurTime()
     if lastAdminGet[sid] and (now - lastAdminGet[sid]) < 1 then return end
     lastAdminGet[sid] = now
+    if not (Trainfitter.CanManage(ply) or Trainfitter.CanViewLogs(ply)) then
+        Audit(ply, "admin_get_no_perm", "")
+        return
+    end
     SendAdminConfig(ply)
     if Trainfitter.CanManage(ply) then SendAdminLists(ply) end
 end)
@@ -1694,11 +1792,11 @@ end)
 net.Receive(NET.AdminManageList, function(len, ply)
     if len > 256 * 8 then return end
     if not IsValid(ply) then return end
+    if NetGlobalThrottled(ply) then return end
     if not Trainfitter.CanManage(ply) then
         Notify(ply, "[Trainfitter] No perms to manage lists", Color(255, 100, 100))
         return
     end
-    if NetGlobalThrottled(ply) then return end
 
     local listName = net.ReadString()
     local action   = net.ReadString()
@@ -1727,11 +1825,11 @@ end)
 
 net.Receive(NET.GetMetrics, function(_, ply)
     if not IsValid(ply) then return end
-    if not Trainfitter.CanManage(ply) then return end
     local sid = ply:SteamID64() or "0"
     local now = CurTime()
     if lastMetricsReq[sid] and (now - lastMetricsReq[sid]) < 2 then return end
     lastMetricsReq[sid] = now
+    if not Trainfitter.CanManage(ply) then return end
 
     local function cnt(t)
         local n = 0
@@ -1740,8 +1838,10 @@ net.Receive(NET.GetMetrics, function(_, ply)
     end
 
     local cacheN = 0
-    if file.IsDir(GMA_CACHE_DIR, "DATA") then
-        cacheN = #(file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {})
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            cacheN = cacheN + #(file.Find(dir .. "/*.dat", "DATA") or {})
+        end
     end
 
     local top = {}
@@ -1780,16 +1880,15 @@ net.Receive(NET.GetMetrics, function(_, ply)
     net.Send(ply)
 end)
 
-local lastLogsReq    = {}
 local LOGS_MAX_PER_PAGE = 50
 
 net.Receive(NET.GetLogs, function(_, ply)
     if not IsValid(ply) then return end
-    if not Trainfitter.CanViewLogs(ply) then return end
     local sid = ply:SteamID64() or "0"
     local now = CurTime()
     if lastLogsReq[sid] and (now - lastLogsReq[sid]) < 1 then return end
     lastLogsReq[sid] = now
+    if not Trainfitter.CanViewLogs(ply) then return end
 
     local page    = net.ReadUInt(16)
     local perPage = math.Clamp(net.ReadUInt(8), 1, LOGS_MAX_PER_PAGE)
@@ -1838,6 +1937,7 @@ end)
 net.Receive(NET.AdminSetConVar, function(len, ply)
     if len > 512 * 8 then return end
     if not IsValid(ply) then return end
+    if NetGlobalThrottled(ply) then return end
     if not Trainfitter.CanManage(ply) then
         Notify(ply, "[Trainfitter] No perms to touch settings", Color(255, 100, 100))
         return
@@ -1870,6 +1970,9 @@ net.Receive(NET.AdminSetConVar, function(len, ply)
     if cv:GetString() == value then return end
 
     cv:SetString(value)
+    if cv:GetString() ~= value then
+        RunConsoleCommand(name, value)
+    end
 
     Audit(ply, "admin_setcvar", name .. "=" .. value)
 
@@ -1889,12 +1992,7 @@ hook.Add("PlayerInitialSpawn", "Trainfitter.SyncPersistent", function(ply)
 
         for _, wsid in ipairs(Trainfitter.Persistent) do
             local info = Trainfitter.SessionBroadcast[wsid] or {}
-            net.Start(NET.Broadcast)
-            net.WriteString(wsid)
-            net.WriteString("")
-            net.WriteString(info.title or "")
-            net.WriteFloat(info.sizeMB or 0)
-            net.WriteString(info.initiatorSid or "")
+            WriteBroadcast(wsid, "", info.title, info.sizeMB, info.initiatorSid)
             net.Send(ply)
         end
     end)
@@ -2034,6 +2132,7 @@ LoadStats()
 LoadNicks()
 
 pcall(SweepStaleGMACache)
+pcall(EnforceCacheCap)
 
 local function PersistentSet()
     local s = {}
@@ -2042,15 +2141,17 @@ local function PersistentSet()
 end
 
 local function PruneNonPersistentCache()
-    if not file.IsDir(GMA_CACHE_DIR, "DATA") then return 0 end
     local persist = PersistentSet()
-    local files   = file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {}
     local removed = 0
-    for _, fname in ipairs(files) do
-        local wsid = string.match(fname, "^(%d+)%.gma$")
-        if wsid and not persist[wsid] then
-            if pcall(file.Delete, GMA_CACHE_DIR .. "/" .. fname) then
-                removed = removed + 1
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            for _, fname in ipairs(file.Find(dir .. "/*.dat", "DATA") or {}) do
+                local wsid = string.match(fname, "^(%d+)")
+                if wsid and not persist[wsid] then
+                    local rel = dir .. "/" .. fname
+                    file.Delete(rel)
+                    if not file.Exists(rel, "DATA") then removed = removed + 1 end
+                end
             end
         end
     end
@@ -2110,15 +2211,15 @@ end)
 
 concommand.Add("trainfitter_cache_clear", function(ply)
     if IsValid(ply) and not Trainfitter.CanManage(ply) then return end
-    if not file.IsDir(GMA_CACHE_DIR, "DATA") then
-        local s = "[Trainfitter] HTTP-cache dir not present, nothing to clear"
-        if IsValid(ply) then ply:ChatPrint(s) else print(s) end
-        return
-    end
-    local files = file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {}
     local n = 0
-    for _, fname in ipairs(files) do
-        if pcall(file.Delete, GMA_CACHE_DIR .. "/" .. fname) then n = n + 1 end
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            for _, fname in ipairs(file.Find(dir .. "/*.dat", "DATA") or {}) do
+                local rel = dir .. "/" .. fname
+                file.Delete(rel)
+                if not file.Exists(rel, "DATA") then n = n + 1 end
+            end
+        end
     end
     Audit(ply, "cache_clear", "removed=" .. n)
     local s = "[Trainfitter] Wiped " .. n .. " cached GMA(s)"
@@ -2160,13 +2261,16 @@ concommand.Add("trainfitter_purge_all", function(ply)
     Trainfitter.PendingRequest   = {}
 
     local removedCache = 0
-    if file.IsDir(GMA_CACHE_DIR, "DATA") then
-        for _, fname in ipairs(file.Find(GMA_CACHE_DIR .. "/*.gma", "DATA") or {}) do
-            if pcall(file.Delete, GMA_CACHE_DIR .. "/" .. fname) then
-                removedCache = removedCache + 1
+    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
+        if file.IsDir(dir, "DATA") then
+            for _, fname in ipairs(file.Find(dir .. "/*.dat", "DATA") or {}) do
+                local rel = dir .. "/" .. fname
+                file.Delete(rel)
+                if not file.Exists(rel, "DATA") then removedCache = removedCache + 1 end
             end
         end
     end
+    Trainfitter.StopAllSandboxes()
 
     Audit(ply, "purge_all", string.format(
         "persistent=%d forgotten=%d cache=%d", #persistentCopy, forgotten, removedCache))

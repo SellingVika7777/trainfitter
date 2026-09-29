@@ -3,56 +3,30 @@
 
 Trainfitter = Trainfitter or {}
 
-local DANGEROUS_PREFIXES = {
-    "lua/includes/",
-    "lua/menu/",
-    "lua/derma/",
-    "lua/vgui/",
-    "lua/weapons/",
-    "lua/effects/",
-    "lua/entities/",
-    "lua/postprocess/",
-    "lua/matproxy/",
-    "lua/sitools/",
-    "lua/wire/",
-    "gamemodes/",
-    "maps/",
-    "addons/",
-    "bin/",
-    "cfg/",
-    "data/",
-    "scripts/vehicles/",
-    "scripts/weapons/",
-}
-
 local DATA_PREFIXES = {
     "materials/",
     "models/",
     "sound/",
-    "resource/",
-    "scripts/",
+    "resource/localization/",
 }
 
-local LUA_ALLOWED_PREFIXES = {
-    "lua/metrostroi/skins/",
+local DANGEROUS_PREFIXES = {
+    "materials/console/",
+    "materials/vgui/logos/",
+    "materials/gui/",
 }
 
-local LUA_ALLOWED_PREFIXES_FULL = {
-    "lua/metrostroi/masks/",
-    "lua/metrostroi/",
-    "lua/autorun/",
-    "lua/entities/",
-    "lua/weapons/",
-    "lua/effects/",
+local FULL_BLOCKED_PREFIXES = {
+    "lua/includes/",
+    "lua/menu/",
+    "gamemodes/",
+    "addons/",
+    "bin/",
+    "cfg/",
+    "data/",
 }
 
-local FULL_MODE_EXEMPT = {
-    ["lua/weapons/"]  = true,
-    ["lua/effects/"]  = true,
-    ["lua/entities/"] = true,
-}
-
-local ALLOWED_EXACT = {
+local ALLOWED_ROOT = {
     ["addon.json"]    = true,
     ["addon.txt"]     = true,
     ["workshop.json"] = true,
@@ -68,38 +42,43 @@ local ALLOWED_EXACT = {
 }
 
 local ALLOWED_EXTS = {
-    lua = true,
     vmt = true, vtf = true, png = true, jpg = true, jpeg = true,
     mdl = true, vvd = true, phy = true, vtx = true, ani = true,
     wav = true, mp3 = true, ogg = true,
-    ttf = true, otf = true,
-    txt = true, md = true, json = true, properties = true,
-    pcf = true,
+    properties = true,
+}
+
+local DROP_EXTS = {
+    txt = true, json = true, md = true, psd = true, xcf = true, bak = true, ini = true, log = true,
+    smd = true, qc = true, qci = true, dmx = true, fbx = true, obj = true, blend = true, tga = true,
+    pdn = true, xml = true, csv = true, db = true, html = true, htm = true, pcf = true, ttf = true, otf = true,
 }
 
 local DANGEROUS_EXTS = {
     exe = true, dll = true, so = true, dylib = true, elf = true,
     bat = true, cmd = true, com = true, scr = true, msi = true,
     vbs = true, vbe = true, js = true, jse = true, wsf = true, wsh = true,
-    ps1 = true, psm1 = true, sh = true, bash = true,
+    ps1 = true, psm1 = true, sh = true, bash = true, vcs = true,
     jar = true, py = true, pyc = true, pyo = true, rb = true, php = true,
     pl = true, app = true, deb = true, rpm = true, run = true, bin = true,
+    cfg = true, vdf = true, bsp = true, nav = true, ain = true,
 }
 
-local MAX_FILE_SIZE          = 256  * 1024 * 1024
-local MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024
-local MAX_TOTAL_FILES        = 4096
-local MAX_LUA_FILES          = 256
-local MAX_TOTAL_LUA_BYTES    = 4 * 1024 * 1024
+local MAX_FILE_SIZE          = 256 * 1024 * 1024
+local MAX_TOTAL_UNCOMPRESSED = 2048 * 1024 * 1024
+local MAX_TOTAL_FILES        = 8192
+local MAX_LUA_FILES          = 512
+local MAX_TOTAL_LUA_BYTES    = 8 * 1024 * 1024
+local MAX_HEADER_STRING      = 1024 * 1024
+local MAX_NAME_LEN           = 1024
+
+Trainfitter.MEL_WSID = "3401843254"
 
 function Trainfitter.GetMaxLuaSize()
-    if Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() then
-        return MAX_TOTAL_LUA_BYTES
-    end
     local cv = GetConVar("trainfitter_max_lua_kb")
-    local kb = cv and cv:GetInt() or 64
+    local kb = cv and cv:GetInt() or 256
     if kb < 1    then kb = 1    end
-    if kb > 1024 then kb = 1024 end
+    if kb > 4096 then kb = 4096 end
     return kb * 1024
 end
 
@@ -116,732 +95,29 @@ function Trainfitter.ShouldRejectBytecode()
     return cv == nil or cv:GetBool() ~= false
 end
 
-local function PreflightCheck(content, displayPath)
-    if not isstring(content) or #content == 0 then
-        return false, "empty lua file: " .. tostring(displayPath)
-    end
-    local maxSize = Trainfitter.GetMaxLuaSize()
-    if #content > maxSize then
-        return false, string.format(
-            "lua file too large: %s (%d B, max %d B - raise trainfitter_max_lua_kb if you trust the addon)",
-            tostring(displayPath), #content, maxSize)
-    end
-    for i = 1, math.min(#content, 4096) do
-        if string.byte(content, i) == 0 then
-            return false, "NUL byte in " .. tostring(displayPath)
-        end
-    end
-    return true
-end
-
-function Trainfitter.ValidateSkinLua(content, displayPath)
-    return PreflightCheck(content, displayPath)
-end
-
-function Trainfitter.ValidateMaskLua(content, displayPath)
-    return PreflightCheck(content, displayPath)
-end
-
-local function ShallowCopy(t)
-    if not istable(t) then return t end
-    local r = {}
-    for k, v in pairs(t) do r[k] = v end
-    return r
-end
-
-local function SafeStringLib()
-    local s = ShallowCopy(string)
-    s.dump = nil
-    return s
-end
-
-
-local SAFE_ENT_METHODS = {
-    "IsValid", "EntIndex", "GetClass", "GetModel",
-    "GetPos", "GetAngles", "GetForward", "GetRight", "GetUp",
-    "GetNWVar", "GetNW2Var",
-    "GetNWString", "GetNWInt", "GetNWFloat", "GetNWBool",
-    "GetNW2String", "GetNW2Int", "GetNW2Float", "GetNW2Bool",
-    "Nick", "GetName", "Name",
-    "SteamID", "SteamID64", "UserID", "AccountID",
-    "Team", "GetTeam",
-    "IsBot", "IsPlayer", "IsAdmin", "IsSuperAdmin",
-    "EyePos", "EyeAngles",
-}
-
-local function MakeEntProxy(ent)
-    if not isentity(ent) then return ent end
-    if not IsValid(ent) then
-        return {
-            IsValid  = function() return false end,
-            EntIndex = function() return 0 end,
-        }
-    end
-    local p = {}
-    for _, name in ipairs(SAFE_ENT_METHODS) do
-        local fn = ent[name]
-        if isfunction(fn) then
-            p[name] = function(_, ...) return fn(ent, ...) end
-        end
-    end
-    return p
-end
-
-local function ProxyList(list)
-    if not istable(list) then return {} end
-    local out = {}
-    for _, e in ipairs(list) do
-        local p = MakeEntProxy(e)
-        if p then out[#out + 1] = p end
-    end
-    return out
-end
-
-local function ProxyArgs(...)
-    local n = select("#", ...)
-    if n == 0 then return end
-    local args = {...}
-    for i = 1, n do
-        if isentity(args[i]) then args[i] = MakeEntProxy(args[i]) end
-    end
-    return unpack(args, 1, n)
-end
-
-local function ProxyCallback(fn)
-    if not isfunction(fn) then return fn end
-    return function(...) return fn(ProxyArgs(...)) end
-end
-
-local function ProxyTableFunctions(t)
-    if not istable(t) then return t end
-    local r = {}
-    for k, v in pairs(t) do
-        if isfunction(v) then r[k] = ProxyCallback(v) else r[k] = v end
-    end
-    return r
-end
-
-local function MakeMetrostroiView()
-    if not istable(Metrostroi) then return {} end
-
-    local function Viktoooor(fn)
-        if not isfunction(fn) then return nil end
-        return function(c, t)
-            return fn(c, ProxyTableFunctions(t))
-        end
-    end
-
-    local function OkDa(fn)
-        if not isfunction(fn) then return nil end
-        return function(...) return fn(...) end
-    end
-
-    return {
-        AddSkin           = OkDa(Metrostroi.AddSkin),
-        AddMask           = Viktoooor(Metrostroi.AddMask),
-        RegisterSkin      = OkDa(Metrostroi.RegisterSkin),
-        DefineSkin        = OkDa(Metrostroi.DefineSkin),
-        RegisterMask      = Viktoooor(Metrostroi.RegisterMask),
-        DefineMask        = Viktoooor(Metrostroi.DefineMask),
-        AddLastStationTex = Metrostroi.AddLastStationTex,
-    }
-end
-
-local function MakeNamespacedHook(prefix)
-    local function ns(id) return prefix .. "::" .. tostring(id) end
-    return {
-        Add = function(name, id, fn)
-            if not isstring(name) or not isfunction(fn) then return end
-            return hook.Add(name, ns(id), ProxyCallback(fn))
-        end,
-        Remove = function(name, id)
-            if not isstring(name) then return end
-            return hook.Remove(name, ns(id))
-        end,
-    }
-end
-
-local function MakeNamespacedTimer(prefix)
-    local function ns(name) return prefix .. "::" .. tostring(name) end
-    return {
-        Create   = function(name, ...) if not isstring(name) then return end return timer.Create(ns(name), ...) end,
-        Simple   = timer.Simple,
-        Exists   = function(name) if not isstring(name) then return false end return timer.Exists(ns(name)) end,
-        Remove   = function(name) if not isstring(name) then return end return timer.Remove(ns(name)) end,
-        Adjust   = function(name, ...) if not isstring(name) then return end return timer.Adjust(ns(name), ...) end,
-        Start    = function(name) if not isstring(name) then return end return timer.Start(ns(name)) end,
-        Stop     = function(name) if not isstring(name) then return end return timer.Stop(ns(name)) end,
-        Toggle   = function(name) if not isstring(name) then return end return timer.Toggle(ns(name)) end,
-        Pause    = function(name) if not isstring(name) then return end return timer.Pause(ns(name)) end,
-        UnPause  = function(name) if not isstring(name) then return end return timer.UnPause(ns(name)) end,
-        TimeLeft = function(name) if not isstring(name) then return 0  end return timer.TimeLeft(ns(name)) end,
-        RepsLeft = function(name) if not isstring(name) then return 0  end return timer.RepsLeft(ns(name)) end,
-    }
-end
-
-local function MakePathPrefix(path)
-    local s = tostring(path or "anon")
-    s = string.gsub(s, "[^%w_/.%-]", "_")
-    return "trainfitter_sb:" .. s
-end
-
-local function SafeMaterial(path, params)
-    if not isstring(path) then return nil end
-    if string.find(path, "..", 1, true)  then return nil end
-    if string.find(path, ":",  1, true)  then return nil end
-    if string.sub(path, 1, 1) == "/"     then return nil end
-    if string.sub(path, 1, 1) == "\\"    then return nil end
-    return Material(path, params)
-end
-
-local function BuildSkinSandbox()
-    local sb = {
-        Metrostroi = MakeMetrostroiView(),
-
-        Color  = Color,
-        Vector = Vector,
-        Angle  = Angle,
-
-        table  = ShallowCopy(table),
-        string = SafeStringLib(),
-        math   = ShallowCopy(math),
-        bit    = ShallowCopy(bit),
-
-        IsValid    = IsValid,
-        isnumber   = isnumber,
-        isstring   = isstring,
-        istable    = istable,
-        isbool     = isbool,
-        isfunction = isfunction,
-        isvector   = isvector,
-        isangle    = isangle,
-        isentity   = isentity,
-        isnan      = isnan,
-        isinf      = isinf,
-
-        type        = type,
-        tostring    = tostring,
-        tonumber    = tonumber,
-        ErrorNoHalt = ErrorNoHalt,
-        Format      = Format,
-
-        pairs   = pairs,
-        ipairs  = ipairs,
-        next    = next,
-        select  = select,
-        unpack  = unpack,
-
-        pcall  = pcall,
-        error  = error,
-        assert = assert,
-
-        SERVER = SERVER,
-        CLIENT = CLIENT,
-
-        Material     = SafeMaterial,
-        AddCSLuaFile = function() end,
-        print        = function() end,
-    }
-    sb._G = sb
-    return sb
-end
-
-local function BuildMaskSandbox(prefix)
-    local sb = BuildSkinSandbox()
-
-    sb.hook  = MakeNamespacedHook(prefix)
-    sb.timer = MakeNamespacedTimer(prefix)
-
-    sb.FindMetaTable = function(name)
-        if name ~= "Entity" then return nil end
-        local mt = FindMetaTable("Entity")
-        if not mt or not isfunction(mt.GetClass) then return nil end
-        return { GetClass = mt.GetClass }
-    end
-
-    sb.Entity = function(idx) return MakeEntProxy(Entity(idx)) end
-
-    sb.ents = {
-        FindByClass  = function(c)    return ProxyList(ents.FindByClass(c)) end,
-        FindInSphere = function(p, r) return ProxyList(ents.FindInSphere(p, r)) end,
-        FindInBox    = function(a, b) return ProxyList(ents.FindInBox(a, b)) end,
-        GetAll       = function()     return ProxyList(ents.GetAll()) end,
-        GetByIndex   = function(i)    return MakeEntProxy(ents.GetByIndex(i)) end,
-        GetCount     = ents.GetCount,
-    }
-
-    sb.player = {
-        GetAll         = function()  return ProxyList(player.GetAll()) end,
-        GetHumans      = function()  return ProxyList(player.GetHumans()) end,
-        GetBots        = function()  return ProxyList(player.GetBots()) end,
-        GetByID        = function(i) return MakeEntProxy(player.GetByID(i)) end,
-        GetBySteamID   = function(s) return MakeEntProxy(player.GetBySteamID(s)) end,
-        GetBySteamID64 = function(s) return MakeEntProxy(player.GetBySteamID64(s)) end,
-        GetCount       = player.GetCount,
-    }
-
-    sb.print      = print
-    sb.MsgC       = MsgC
-    sb.Msg        = Msg
-    sb.MsgN       = MsgN
-    sb.PrintTable = PrintTable
-
-    sb._G = sb
-    return sb
-end
-
-function Trainfitter.ExecSandboxed(content, path, kind)
-    if not isstring(content) or #content == 0 then
-        return false, "empty content"
-    end
-
-    if Trainfitter.ShouldRejectBytecode() and string.byte(content, 1) == 0x1B then
-        return false, "lua bytecode rejected (set trainfitter_reject_bytecode 0 to allow)"
-    end
-
-    local fn, compileErr = CompileString(content, path, false)
-    if isstring(fn) then return false, "compile: " .. fn end
-    if not isfunction(fn) then return false, "compile returned non-function" end
-
-    if not isfunction(setfenv) then
-        return false, "setfenv unavailable - refusing to execute without sandbox"
-    end
-
-    local prefix = MakePathPrefix(path)
-    local sb = (kind == "mask") and BuildMaskSandbox(prefix) or BuildSkinSandbox()
-    local setOk, setErr = pcall(setfenv, fn, sb)
-    if not setOk then return false, "setfenv failed: " .. tostring(setErr) end
-
-    local hookSet = false
-    if debug and isfunction(debug.sethook) then
-        local limit = Trainfitter.GetSandboxInstrLimit()
-        debug.sethook(function() error("instruction limit exceeded", 2) end, "", limit)
-        hookSet = true
-    end
-
-    local ok, runErr = pcall(fn)
-
-    if hookSet then debug.sethook() end
-
-    if not ok then return false, "runtime: " .. tostring(runErr) end
-    return true
-end
-
-
-local function read_cstr(f, maxlen)
-    if not f then return "" end
-    maxlen = maxlen or 128
-
-    local ok, s = pcall(f.ReadString, f, maxlen)
-    if ok and isstring(s) then return s end
-
-    local out = {}
-    for _ = 1, maxlen do
-        local b = f:Read(1)
-        if not b or #b == 0 then break end
-        if b == "\0" then break end
-        out[#out + 1] = b
-    end
-    return table.concat(out)
-end
-
-local function read_u32(f)
-    local b = f:Read(4)
-    if not b or #b < 4 then return 0 end
-    return string.byte(b, 1)
-         + string.byte(b, 2) * 0x100
-         + string.byte(b, 3) * 0x10000
-         + string.byte(b, 4) * 0x1000000
-end
-
-local function read_u64_as_num(f)
-    local b = f:Read(8)
-    if not b or #b < 8 then return 0 end
-    local lo = string.byte(b, 1)
-           + string.byte(b, 2) * 0x100
-           + string.byte(b, 3) * 0x10000
-           + string.byte(b, 4) * 0x1000000
-    local hi = string.byte(b, 5)
-           + string.byte(b, 6) * 0x100
-           + string.byte(b, 7) * 0x10000
-           + string.byte(b, 8) * 0x1000000
-    return lo + hi * 2^32
-end
-
-local function is_dangerous_path(p, fullLua)
-    if not fullLua then
-        for _, pref in ipairs(DANGEROUS_PREFIXES) do
-            if string.sub(p, 1, #pref) == pref then return pref end
-        end
-    end
-    if string.find(p, "..", 1, true)   then return ".." end
-    if string.find(p, "\0",   1, true) then return "\\0" end
-    if string.find(p, ":",    1, true) then return ":"  end
-    if string.sub(p, 1, 1) == "/"      then return "/"  end
-    if string.sub(p, 1, 1) == "\\"     then return "\\" end
-    return nil
-end
-
-local function is_lua_addon_path(p, fullLua)
-    for _, pref in ipairs(LUA_ALLOWED_PREFIXES) do
-        if string.sub(p, 1, #pref) == pref then return pref end
-    end
-    if fullLua then
-        for _, pref in ipairs(LUA_ALLOWED_PREFIXES_FULL) do
-            if string.sub(p, 1, #pref) == pref then return pref end
-        end
-        return "lua/"
-    end
-    return nil
-end
-
-local function is_allowed_path(p, is_lua, fullLua)
-    if ALLOWED_EXACT[p] then return true end
-
-    if is_lua then
-        return is_lua_addon_path(p, fullLua) ~= nil
-    end
-
-    if fullLua then return true end
-
-    for _, pref in ipairs(DATA_PREFIXES) do
-        if string.sub(p, 1, #pref) == pref then return true end
-    end
-    return false
-end
-
-local function get_ext(p)
-    local dot = string.find(p, "%.[^%./]+$")
-    if not dot then return "" end
-    return string.sub(p, dot + 1)
-end
-
-function Trainfitter.ScanGMA(gmapath, fullLuaOverride)
-    if not isstring(gmapath) or gmapath == "" then
-        return false, "no path", nil
-    end
-
-    local fullLua
-    if fullLuaOverride ~= nil then
-        fullLua = fullLuaOverride == true
-    else
-        fullLua = Trainfitter.ShouldAllowFullLua and Trainfitter.ShouldAllowFullLua() or false
-    end
-
-    local maxLuaSize = Trainfitter.GetMaxLuaSize()
-
-    local f = file.Open(gmapath, "rb", "GAME")
-    if not f then
-        return true, "ugc handle (skipped)", nil
-    end
-
-    local magic = f:Read(4)
-    if magic ~= "GMAD" then
-        f:Close()
-        return false, "not a gma (magic=" .. tostring(magic) .. ")", nil
-    end
-
-    local version = f:Read(1)
-    version = version and string.byte(version) or 0
-    if version > 3 then
-        f:Close()
-        return false, "unsupported gma version " .. version, nil
-    end
-
-    f:Read(8); f:Read(8)
-
-    if version >= 2 then
-        for _ = 1, 1024 do
-            local s = read_cstr(f, 128)
-            if not s or s == "" then break end
-        end
-    end
-
-    read_cstr(f, 512)
-    read_cstr(f, 4096)
-    read_cstr(f, 256)
-
-    f:Read(4)
-
-
-    local files            = {}
-    local entries          = {}
-    local luaBodies        = {}
-    local skinFileCount    = 0
-    local maskFileCount    = 0
-    local materialsCount   = 0
-    local metroAssetCount  = 0
-    local luaFileCount     = 0
-    local totalBytes       = 0
-
-    for i = 1, MAX_TOTAL_FILES + 1 do
-        local filenum = read_u32(f)
-        if filenum == 0 then break end
-
-        if i > MAX_TOTAL_FILES then
-            f:Close()
-            return false, "too many files (>" .. MAX_TOTAL_FILES .. ")", files
-        end
-
-        local name = read_cstr(f, 512)
-        local size = read_u64_as_num(f)
-        f:Read(4)
-
-        if not name or name == "" then
-            f:Close()
-            return false, "empty filename in index", files
-        end
-        if size > MAX_FILE_SIZE then
-            f:Close()
-            return false, string.format("file too big: %s (%d MB)",
-                name, math.floor(size / 1024 / 1024)), files
-        end
-
-        totalBytes = totalBytes + size
-        if totalBytes > MAX_TOTAL_UNCOMPRESSED then
-            f:Close()
-            return false, string.format(
-                "addon total uncompressed size exceeds %d MB",
-                math.floor(MAX_TOTAL_UNCOMPRESSED / 1024 / 1024)), files
-        end
-
-        table.insert(files, name)
-
-        local lower = string.lower(name)
-
-        local danger = is_dangerous_path(lower, fullLua)
-        if danger then
-            f:Close()
-            local hint = ""
-            if not fullLua and FULL_MODE_EXEMPT[danger] then
-                hint = " - enable convar 'trainfitter_allow_full_lua 1' to install pults/SENT addons"
-            end
-            return false,
-                "blocked path: " .. name .. " (bad token '" .. danger .. "')" .. hint,
-                files
-        end
-
-        local ext = string.lower(get_ext(lower))
-        local badExt
-        if fullLua then
-            badExt = (ext == "" and not ALLOWED_EXACT[lower]) or DANGEROUS_EXTS[ext]
-        else
-            badExt = ext == "" or not ALLOWED_EXTS[ext]
-        end
-        if badExt then
-            f:Close()
-            return false,
-                "disallowed file type: '" .. name .. "' (." .. ext .. ")",
-                files
-        end
-
-        local isLua       = (ext == "lua")
-        local addonPref   = isLua and is_lua_addon_path(lower, fullLua) or nil
-        local isAddonLua  = addonPref ~= nil
-        local isMaskLua   = addonPref == "lua/metrostroi/masks/"
-        local isAutorunLua = addonPref == "lua/autorun/"
-
-        if not isLua and not is_allowed_path(lower, false, fullLua) then
-            f:Close()
-            return false,
-                "file in unsupported folder: '" .. name ..
-                "' - only materials/, models/, sound/, resource/, scripts/ allowed",
-                files
-        end
-
-        if isLua and not isAddonLua then
-            f:Close()
-            local hint = ""
-            if not fullLua then
-                local needsFull =
-                       string.sub(lower, 1, 21) == "lua/metrostroi/masks/"
-                    or string.sub(lower, 1, 15) == "lua/metrostroi/"
-                    or string.sub(lower, 1, 12) == "lua/autorun/"
-                    or string.sub(lower, 1, 13) == "lua/entities/"
-                    or string.sub(lower, 1, 12) == "lua/weapons/"
-                    or string.sub(lower, 1, 12) == "lua/effects/"
-                if needsFull then
-                    hint = " - addon contains masks or pults; enable convar "
-                        .. "'trainfitter_allow_full_lua 1' to install advanced addons"
-                end
-            end
-            return false,
-                "unsupported lua path: '" .. name .. "'" .. hint,
-                files
-        end
-
-        if isLua then
-            luaFileCount = luaFileCount + 1
-            if luaFileCount > MAX_LUA_FILES then
-                f:Close()
-                return false,
-                    "too many lua files in addon (>" .. MAX_LUA_FILES .. ")",
-                    files
-            end
-            if not fullLua and isAddonLua and size > maxLuaSize then
-                f:Close()
-                return false, string.format(
-                    "addon lua file too large: %s (%d B, max %d B - raise trainfitter_max_lua_kb if you trust the source)",
-                    name, size, maxLuaSize), files
-            end
-        end
-
-        if isMaskLua then
-            maskFileCount = maskFileCount + 1
-        elseif isAddonLua and not isAutorunLua then
-            skinFileCount = skinFileCount + 1
-        elseif isAddonLua and isAutorunLua and fullLua then
-            skinFileCount = skinFileCount + 1
-        elseif string.sub(lower, 1, 10) == "materials/" then
-            materialsCount = materialsCount + 1
-        end
-
-        if not isLua then
-            local startsAsset =
-                   string.sub(lower, 1, 10) == "materials/"
-                or string.sub(lower, 1,  7) == "models/"
-                or string.sub(lower, 1,  6) == "sound/"
-            if startsAsset and string.find(lower, "metrostroi", 1, true) then
-                metroAssetCount = metroAssetCount + 1
-            end
-        end
-
-        table.insert(entries, {
-            name        = name,
-            size        = size,
-            isLua       = isLua,
-            isAddonLua  = isAddonLua,
-            isMaskLua   = isMaskLua,
-            isAutorunLua = isAutorunLua,
-        })
-    end
-
-    if not fullLua and skinFileCount == 0 and maskFileCount == 0 and metroAssetCount == 0 then
-        f:Close()
-        return false,
-            "not a Metrostroi addon (no lua/metrostroi/skins/*.lua, "
-            .. "no lua/metrostroi/masks/*.lua, and no materials/models/sound "
-            .. "with 'metrostroi' in path; materials=" .. materialsCount .. ")",
-            files
-    end
-
-    local luaBytesScanned = 0
-    for _, e in ipairs(entries) do
-        if e.isAddonLua then
-            if luaBytesScanned + e.size > MAX_TOTAL_LUA_BYTES then
-                f:Close()
-                return false, string.format(
-                    "too much lua content in addon (>%d MB)",
-                    math.floor(MAX_TOTAL_LUA_BYTES / 1024 / 1024)), files
-            end
-            local body = f:Read(e.size)
-            luaBytesScanned = luaBytesScanned + e.size
-            if not isstring(body) or #body < e.size then
-                f:Close()
-                return false, "truncated lua body for " .. e.name, files
-            end
-            local validator = e.isAutorunLua
-                              and Trainfitter.ValidateMaskLua
-                              or  Trainfitter.ValidateSkinLua
-            local ok, reason = validator(body, e.name)
-            if not ok then
-                f:Close()
-                return false, reason, files
-            end
-            luaBodies[string.lower(e.name)] = body
-        else
-            if e.size > 0 then
-                local okT, pos  = pcall(f.Tell, f)
-                local seeked    = false
-                if okT and isnumber(pos) then
-                    local okS = pcall(f.Seek, f, pos + e.size)
-                    seeked = okS == true
-                end
-                if not seeked then
-                    local remaining = e.size
-                    while remaining > 0 do
-                        local take = remaining > 65536 and 65536 or remaining
-                        local chunk = f:Read(take)
-                        if not chunk or #chunk == 0 then break end
-                        remaining = remaining - #chunk
-                    end
-                end
-            end
-        end
-    end
-
-    f:Close()
-    return true, nil, files, luaBodies
-end
-
-if CLIENT then
-    CreateClientConVar("trainfitter_gma_scan", "1", true, false,
-        "1 = scan GMA before mounting (guards against non-skin addons).")
-end
-
-if SERVER then
-    CreateConVar("trainfitter_server_gma_scan", "1",
-        { FCVAR_ARCHIVE, FCVAR_PROTECTED },
-        "1 = server-side strict Metrostroi-only GMA validation (keep enabled).")
-
-    CreateConVar("trainfitter_content_scan", "1",
-        { FCVAR_ARCHIVE, FCVAR_PROTECTED },
-        "1 = runtime content scan on every .lua file before execution.")
-
-    CreateConVar("trainfitter_allow_full_lua", "0",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "DANGEROUS: 1 = allow pults / custom SENT / full-Lua addons. " ..
-        "These run UNSANDBOXED with full server permissions. " ..
-        "Only enable if you fully trust everyone who can install addons.")
-
-    CreateConVar("trainfitter_max_lua_kb", "64",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "Max size of one addon-lua file in KB. Default 64. Clamped to 1-1024. " ..
-        "Raise if your masks are bigger than 64KB (rare but happens).")
-
-    CreateConVar("trainfitter_sandbox_instr_m", "100",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "Max sandbox instruction count in millions. Default 100. Clamped to 1-10000. " ..
-        "Raise if heavy masks time out during init.")
-
-    CreateConVar("trainfitter_reject_bytecode", "1",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "1 = reject Lua bytecode (default, safe). 0 = allow it (DANGEROUS).")
-
-    CreateConVar("trainfitter_allow_collections", "0",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "1 = let players apply whole Workshop collections at once. 0 = single addons only.")
-
-    CreateConVar("trainfitter_max_collection", "0",
-        { FCVAR_ARCHIVE, FCVAR_REPLICATED },
-        "Max addons pulled from one collection. 0 = unlimited (use with care).")
-end
-
-function Trainfitter.ShouldScanGMA()
-    if SERVER then
-        local cv = GetConVar("trainfitter_server_gma_scan")
-        return cv == nil or cv:GetBool() ~= false
-    end
-    local cv = GetConVar("trainfitter_gma_scan")
-    return cv and cv:GetBool() ~= false
-end
-
-function Trainfitter.ShouldContentScan()
-    if SERVER then
-        local cv = GetConVar("trainfitter_content_scan")
-        return cv == nil or cv:GetBool() ~= false
-    end
-    return true
-end
-
 function Trainfitter.ShouldAllowFullLua()
     local cv = GetConVar("trainfitter_allow_full_lua")
     return cv ~= nil and cv:GetBool() == true
 end
 
+function Trainfitter.ShouldAllowMasks()
+    if Trainfitter.ShouldAllowFullLua() then return true end
+    local cv = GetConVar("trainfitter_allow_masks")
+    return cv == nil or cv:GetBool() ~= false
+end
+
+function Trainfitter.MELSupportEnabled()
+    local cv = GetConVar("trainfitter_mel_support")
+    return cv ~= nil and cv:GetBool() == true
+end
+
+function Trainfitter.MELPresent()
+    return istable(MEL) and isfunction(MEL.DefineRecipe) and istable(MEL.Recipes) and istable(MEL.InjectStack)
+end
+
 function Trainfitter.AllowCollections()
     local cv = GetConVar("trainfitter_allow_collections")
-    return cv == nil or cv:GetBool() ~= false
+    return cv ~= nil and cv:GetBool() == true
 end
 
 function Trainfitter.GetMaxCollection()
@@ -849,4 +125,465 @@ function Trainfitter.GetMaxCollection()
     local n = cv and cv:GetInt() or 0
     if n <= 0 then return math.huge end
     return n
+end
+
+local function StartsWith(s, p)
+    return string.sub(s, 1, #p) == p
+end
+
+local function AnyPrefix(s, list)
+    for _, p in ipairs(list) do
+        if StartsWith(s, p) then return p end
+    end
+    return nil
+end
+
+local function GetExt(p)
+    return string.match(p, "%.([^%./]+)$") or ""
+end
+
+local function U32(b)
+    if not b or #b < 4 then return nil end
+    local b1, b2, b3, b4 = string.byte(b, 1, 4)
+    return b1 + b2 * 0x100 + b3 * 0x10000 + b4 * 0x1000000
+end
+
+local function U64(b)
+    if not b or #b < 8 then return nil end
+    local lo = U32(string.sub(b, 1, 4))
+    local hi = U32(string.sub(b, 5, 8))
+    if hi >= 0x80000000 then return nil end
+    return lo + hi * 4294967296
+end
+
+local function PackU32(n)
+    n = math.floor(n)
+    return string.char(n % 256, math.floor(n / 0x100) % 256, math.floor(n / 0x10000) % 256, math.floor(n / 0x1000000) % 256)
+end
+
+local function PackU64(n)
+    local lo = n % 4294967296
+    local hi = math.floor(n / 4294967296)
+    return PackU32(lo) .. PackU32(hi)
+end
+
+local function ReadCString(f, cap)
+    local parts = {}
+    local total = 0
+    while true do
+        local pos = f:Tell()
+        local chunk = f:Read(256)
+        if not chunk or #chunk == 0 then return nil end
+        local z = string.find(chunk, "\0", 1, true)
+        if z then
+            parts[#parts + 1] = string.sub(chunk, 1, z - 1)
+            f:Seek(pos + z)
+            return table.concat(parts)
+        end
+        parts[#parts + 1] = chunk
+        total = total + #chunk
+        if total > cap then return nil end
+    end
+end
+
+local function I32(b, pos)
+    local v = U32(string.sub(b, pos, pos + 3))
+    if v == nil then return nil end
+    if v >= 0x80000000 then v = v - 4294967296 end
+    return v
+end
+
+local function U16(b, pos)
+    local b1, b2 = string.byte(b, pos, pos + 1)
+    if not b2 then return nil end
+    return b1 + b2 * 256
+end
+
+local HEADER_CHECKS = {
+    mdl = function(h, size)
+        if string.sub(h, 1, 4) ~= "IDST" then return "bad MDL magic" end
+        local ver = I32(h, 5)
+        if not ver or ver < 44 or ver > 53 then return "unsupported MDL version" end
+        local len = I32(h, 77)
+        if not len or len < 200 or len > size then return "MDL length field is out of range" end
+    end,
+    vvd = function(h, size)
+        if string.sub(h, 1, 4) ~= "IDSV" then return "bad VVD magic" end
+        if I32(h, 5) ~= 4 then return "unsupported VVD version" end
+        local lods = I32(h, 13)
+        if not lods or lods < 1 or lods > 8 then return "bad VVD LOD count" end
+        local fixupOff, vertOff, tanOff = I32(h, 53), I32(h, 57), I32(h, 61)
+        for _, o in ipairs({ fixupOff, vertOff, tanOff }) do
+            if not o or o < 0 or o > size then return "VVD offset out of range" end
+        end
+    end,
+    vtx = function(h, size)
+        if I32(h, 1) ~= 7 then return "unsupported VTX version" end
+        local lods = I32(h, 21)
+        if not lods or lods < 1 or lods > 8 then return "bad VTX LOD count" end
+        local matOff, parts, partOff = I32(h, 25), I32(h, 29), I32(h, 33)
+        if not matOff or matOff < 0 or matOff > size then return "VTX offset out of range" end
+        if not parts or parts < 0 or parts > 256 then return "bad VTX body part count" end
+        if not partOff or partOff < 0 or partOff > size then return "VTX offset out of range" end
+    end,
+    phy = function(h, size)
+        if I32(h, 1) ~= 16 then return "bad PHY header size" end
+        local solids = I32(h, 9)
+        if not solids or solids < 0 or solids > 1024 then return "bad PHY solid count" end
+    end,
+    vtf = function(h, size)
+        if string.sub(h, 1, 4) ~= "VTF\0" then return "bad VTF magic" end
+        if I32(h, 5) ~= 7 then return "unsupported VTF version" end
+        local minor = I32(h, 9)
+        if not minor or minor < 0 or minor > 6 then return "unsupported VTF version" end
+        local hsize = I32(h, 13)
+        if not hsize or hsize < 48 or hsize > 4096 or hsize > size then return "bad VTF header size" end
+        local w, hh = U16(h, 17), U16(h, 19)
+        if not w or not hh or w < 1 or hh < 1 or w > 16384 or hh > 16384 then return "bad VTF dimensions" end
+        local frames = U16(h, 25)
+        if not frames or frames < 1 or frames > 4096 then return "bad VTF frame count" end
+    end,
+}
+
+local function Classify(lower)
+    if string.match(lower, "^lua/metrostroi/skins/[^/]+%.lua$") then return "skin" end
+    if string.match(lower, "^lua/metrostroi_data/languages/[^/]+%.lua$") then return "language" end
+    if string.match(lower, "^lua/autorun/[^/]+%.lua$") then return "autorun" end
+    if string.match(lower, "^lua/autorun/server/[^/]+%.lua$") then return "autorun_sv" end
+    if string.match(lower, "^lua/autorun/client/[^/]+%.lua$") then return "autorun_cl" end
+    if string.match(lower, "^lua/metrostroi/masks/[^/]+%.lua$") then return "mask" end
+    if StartsWith(lower, "lua/recipies/") then
+        if string.find(lower, "/disabled/", 1, true) then return "other" end
+        local name = string.match(lower, "([^/]+)$") or ""
+        if name == "warning.lua" or name == "license.lua" then return "other" end
+        return "recipe"
+    end
+    return "other"
+end
+
+local function Fail(report, reason, key)
+    report.ok = false
+    report.reason = reason
+    report.reasonKey = key
+    return report
+end
+
+function Trainfitter.ScanGMA(gmapath, opts)
+    opts = opts or {}
+    local fullLua    = opts.fullLua == true
+    local allowMasks = opts.allowMasks == true or fullLua
+    local maxLuaSize = Trainfitter.GetMaxLuaSize()
+
+    local report = {
+        ok = false, files = {}, entries = {}, bodies = {}, byClass = {
+            skin = {}, language = {}, autorun = {}, autorun_sv = {}, autorun_cl = {}, mask = {}, recipe = {}, other = {},
+        },
+        hasLua = false, usesMEL = false, metro = false, luaBytes = 0, totalBytes = 0,
+    }
+
+    if not isstring(gmapath) or gmapath == "" then return Fail(report, "no GMA path") end
+    local f = file.Open(gmapath, "rb", "GAME")
+    if not f then return Fail(report, "cannot open GMA: " .. gmapath) end
+
+    local ok, err = pcall(function()
+        if f:Read(4) ~= "GMAD" then error("not a GMA file", 0) end
+        local vb = f:Read(1)
+        local version = vb and string.byte(vb) or 0
+        if version < 1 or version > 3 then error("unsupported GMA version " .. version, 0) end
+        report.header = { version = version }
+        report.header.steamid = f:Read(8)
+        report.header.timestamp = f:Read(8)
+        if not report.header.timestamp or #report.header.timestamp < 8 then error("truncated GMA header", 0) end
+        report.header.required = {}
+        if version > 1 then
+            for _ = 1, 4096 do
+                local s = ReadCString(f, MAX_HEADER_STRING)
+                if s == nil then error("malformed GMA header", 0) end
+                if s == "" then break end
+                report.header.required[#report.header.required + 1] = s
+            end
+        end
+        report.header.name = ReadCString(f, MAX_HEADER_STRING)
+        report.header.desc = ReadCString(f, MAX_HEADER_STRING)
+        report.header.author = ReadCString(f, MAX_HEADER_STRING)
+        if not report.header.name or not report.header.desc or not report.header.author then error("malformed GMA header", 0) end
+        report.header.addonVersion = f:Read(4)
+
+        local offset = 0
+        for i = 1, MAX_TOTAL_FILES + 1 do
+            local num = U32(f:Read(4))
+            if num == nil then error("truncated GMA index", 0) end
+            if num == 0 then break end
+            if i > MAX_TOTAL_FILES then error("too many files (>" .. MAX_TOTAL_FILES .. ")", 0) end
+            local name = ReadCString(f, MAX_NAME_LEN)
+            if not name or name == "" then error("malformed file name in GMA index", 0) end
+            local size = U64(f:Read(8))
+            local crc = f:Read(4)
+            if size == nil or not crc or #crc < 4 then error("malformed GMA index entry", 0) end
+            if size > MAX_FILE_SIZE then
+                error(string.format("file too big: %s (%d MB)", name, math.floor(size / 1048576)), 0)
+            end
+            report.totalBytes = report.totalBytes + size
+            if report.totalBytes > MAX_TOTAL_UNCOMPRESSED then error("addon is too large when unpacked", 0) end
+            report.entries[#report.entries + 1] = { name = name, size = size, crc = crc, offset = offset }
+            report.files[#report.files + 1] = name
+            offset = offset + size
+        end
+        report.dataStart = f:Tell()
+        if report.dataStart + offset > f:Size() then error("GMA data section is truncated", 0) end
+    end)
+    if not ok then
+        f:Close()
+        return Fail(report, tostring(err))
+    end
+
+    local luaCount = 0
+    for _, e in ipairs(report.entries) do
+        local lower = string.lower(e.name)
+        e.lower = lower
+        if string.find(lower, "..", 1, true) or string.find(lower, ":", 1, true) or string.find(lower, "\\", 1, true)
+           or StartsWith(lower, "/") or string.find(lower, "\0", 1, true) then
+            f:Close()
+            return Fail(report, "blocked path: " .. e.name)
+        end
+        local ext = GetExt(lower)
+        if DANGEROUS_EXTS[ext] then
+            f:Close()
+            return Fail(report, "disallowed file type: " .. e.name)
+        end
+        if ext == "lua" then
+            if not StartsWith(lower, "lua/") then
+                f:Close()
+                return Fail(report, "lua file outside lua/: " .. e.name)
+            end
+            if fullLua and AnyPrefix(lower, FULL_BLOCKED_PREFIXES) then
+                f:Close()
+                return Fail(report, "blocked path: " .. e.name)
+            end
+            luaCount = luaCount + 1
+            if luaCount > MAX_LUA_FILES then
+                f:Close()
+                return Fail(report, "too many lua files (>" .. MAX_LUA_FILES .. ")")
+            end
+            if e.size > maxLuaSize then
+                f:Close()
+                return Fail(report, string.format("lua file too large: %s (%d KB, limit %d KB - raise trainfitter_max_lua_kb if you trust it)",
+                    e.name, math.ceil(e.size / 1024), math.floor(maxLuaSize / 1024)))
+            end
+            e.isLua = true
+            e.class = Classify(lower)
+            report.hasLua = true
+        elseif ALLOWED_ROOT[lower] then
+            e.drop = true
+        elseif StartsWith(lower, "lua/") then
+            e.drop = true
+        elseif fullLua then
+            if AnyPrefix(lower, FULL_BLOCKED_PREFIXES) then
+                f:Close()
+                return Fail(report, "blocked path: " .. e.name)
+            end
+            e.keep = true
+        elseif DROP_EXTS[ext] then
+            e.drop = true
+        else
+            if not AnyPrefix(lower, DATA_PREFIXES) or AnyPrefix(lower, DANGEROUS_PREFIXES) then
+                f:Close()
+                return Fail(report, "file in unsupported folder: " .. e.name
+                    .. " (only materials/, models/, sound/, resource/localization/ are allowed)")
+            end
+            if not ALLOWED_EXTS[ext] then
+                f:Close()
+                return Fail(report, "disallowed file type: " .. e.name)
+            end
+            e.keep = true
+        end
+        if e.keep and (StartsWith(lower, "materials/") or StartsWith(lower, "models/") or StartsWith(lower, "sound/"))
+           and string.find(lower, "metrostroi", 1, true) then
+            report.metro = true
+        end
+    end
+
+    for _, e in ipairs(report.entries) do
+        if e.keep and not fullLua then
+            local check = HEADER_CHECKS[GetExt(e.lower)]
+            if check then
+                if e.size < 16 then
+                    f:Close()
+                    return Fail(report, "malformed file: " .. e.name)
+                end
+                f:Seek(report.dataStart + e.offset)
+                local h = f:Read(math.min(e.size, 128)) or ""
+                local bad = check(h .. string.rep("\0", 128 - #h), e.size)
+                if bad then
+                    f:Close()
+                    return Fail(report, "malformed file " .. e.name .. ": " .. bad)
+                end
+            end
+            if not string.find(e.lower, "metrostroi", 1, true)
+               and file.Exists(e.name, "GAME") and not file.Exists(e.name, "WORKSHOP") then
+                f:Close()
+                return Fail(report, "addon tries to replace a base game file: " .. e.name)
+            end
+        end
+    end
+
+    for _, e in ipairs(report.entries) do
+        if e.isLua then
+            report.luaBytes = report.luaBytes + e.size
+            if report.luaBytes > MAX_TOTAL_LUA_BYTES then
+                f:Close()
+                return Fail(report, "too much lua in addon (>" .. math.floor(MAX_TOTAL_LUA_BYTES / 1048576) .. " MB)")
+            end
+            f:Seek(report.dataStart + e.offset)
+            local body = e.size > 0 and f:Read(e.size) or ""
+            if not isstring(body) or #body < e.size then
+                f:Close()
+                return Fail(report, "truncated lua body: " .. e.name)
+            end
+            if string.byte(body, 1) == 0x1B and (not fullLua or Trainfitter.ShouldRejectBytecode()) then
+                f:Close()
+                return Fail(report, "lua bytecode is not allowed: " .. e.name)
+            end
+            report.bodies[e.lower] = body
+            local bucket = report.byClass[e.class]
+            bucket[#bucket + 1] = e.lower
+            if e.class == "recipe" or string.find(body, "MetrostroiExtensionsLib", 1, true)
+               or string.match(body, "[^%w_%.]MEL%s*[%.:%[]") or string.match(body, "^MEL%s*[%.:%[]") then
+                report.usesMEL = true
+            end
+            if not report.metro and (string.find(body, "Metrostroi", 1, true) or string.find(body, "gmod_subway", 1, true)) then
+                report.metro = true
+            end
+        end
+    end
+    f:Close()
+
+    for _, bucket in pairs(report.byClass) do table.sort(bucket) end
+    local c = report.byClass
+    if #c.skin > 0 or #c.recipe > 0 then report.metro = true end
+
+    local needsMasks = #c.autorun > 0 or #c.autorun_sv > 0 or #c.autorun_cl > 0 or #c.mask > 0 or #c.recipe > 0
+    report.needsMasks = needsMasks
+    local entryPoints = #c.skin + #c.autorun + #c.autorun_sv + #c.autorun_cl + #c.mask + #c.recipe + #c.language
+
+    if not report.metro and not fullLua then
+        return Fail(report, "not a Metrostroi addon (no Metrostroi skins, masks, recipes or assets)", "not_metro")
+    end
+    if needsMasks and not allowMasks then
+        return Fail(report, "addon contains masks/scripts; enable 'trainfitter_allow_masks 1' to allow them", "masks_disabled")
+    end
+    if #c.other > 0 and entryPoints == 0 and not fullLua then
+        return Fail(report, "addon ships Lua that only works as a full addon (entities/weapons); only 'trainfitter_allow_full_lua 1' can load it", "full_only")
+    end
+
+    report.ok = true
+    return report
+end
+
+function Trainfitter.CleanGMADir()
+    return SERVER and "trainfitter/gmas" or "trainfitter/gmas_cl"
+end
+
+function Trainfitter.CleanGMAName(wsid, report)
+    local sig = {}
+    for _, e in ipairs(report.entries) do
+        if e.keep then sig[#sig + 1] = e.name .. ":" .. e.size .. ":" .. e.crc end
+    end
+    return string.format("%s/%s_%s.dat", Trainfitter.CleanGMADir(), wsid, util.CRC(table.concat(sig, "|")))
+end
+
+function Trainfitter.RepackGMA(srcPath, report, wsid, callback)
+    local dst = Trainfitter.CleanGMAName(wsid, report)
+    local dir = Trainfitter.CleanGMADir()
+    if not file.IsDir("trainfitter", "DATA") then file.CreateDir("trainfitter") end
+    if not file.IsDir(dir, "DATA") then file.CreateDir(dir) end
+
+    local header = {}
+    header[#header + 1] = "GMAD"
+    header[#header + 1] = string.char(3)
+    header[#header + 1] = report.header.steamid or string.rep("\0", 8)
+    header[#header + 1] = report.header.timestamp or string.rep("\0", 8)
+    header[#header + 1] = "\0"
+    header[#header + 1] = (report.header.name or "trainfitter") .. "\0"
+    header[#header + 1] = (report.header.desc or "") .. "\0"
+    header[#header + 1] = (report.header.author or "") .. "\0"
+    header[#header + 1] = report.header.addonVersion or PackU32(1)
+    local keep = {}
+    local dataSize = 0
+    for _, e in ipairs(report.entries) do
+        if e.keep then
+            keep[#keep + 1] = e
+            header[#header + 1] = PackU32(#keep) .. e.name .. "\0" .. PackU64(e.size) .. e.crc
+            dataSize = dataSize + e.size
+        end
+    end
+    header[#header + 1] = PackU32(0)
+    local headerStr = table.concat(header)
+    local expected = #headerStr + dataSize + 4
+
+    if file.Exists(dst, "DATA") and file.Size(dst, "DATA") == expected then
+        callback("data/" .. dst)
+        return
+    end
+
+    local prefix = dir .. "/" .. wsid .. "_"
+    for _, fname in ipairs(file.Find(dir .. "/" .. wsid .. "_*.dat", "DATA") or {}) do
+        local rel = dir .. "/" .. fname
+        if rel ~= dst and StartsWith(rel, prefix) then pcall(file.Delete, rel) end
+    end
+
+    local src = file.Open(srcPath, "rb", "GAME")
+    if not src then callback(nil, "cannot reopen source GMA") return end
+    local out = file.Open(dst, "wb", "DATA")
+    if not out then src:Close() callback(nil, "cannot write " .. dst) return end
+    out:Write(headerStr)
+
+    local budget = SERVER and 0.02 or 0.008
+    local co = coroutine.create(function()
+        local chunk = 1048576
+        local started = SysTime()
+        for _, e in ipairs(keep) do
+            src:Seek(report.dataStart + e.offset)
+            local left = e.size
+            while left > 0 do
+                local take = math.min(left, chunk)
+                local data = src:Read(take)
+                if not data or #data ~= take then error("short read in " .. e.name, 0) end
+                out:Write(data)
+                left = left - take
+                if SysTime() - started > budget then
+                    coroutine.yield()
+                    started = SysTime()
+                end
+            end
+        end
+        out:Write(PackU32(0))
+    end)
+
+    local tname = "Trainfitter.Repack." .. wsid
+    local function finish(ok, err)
+        timer.Remove(tname)
+        src:Close()
+        out:Close()
+        if not ok then
+            pcall(file.Delete, dst)
+            callback(nil, err)
+            return
+        end
+        if file.Size(dst, "DATA") ~= expected then
+            pcall(file.Delete, dst)
+            callback(nil, "repacked GMA has unexpected size")
+            return
+        end
+        callback("data/" .. dst)
+    end
+
+    local function step()
+        local ok, err = coroutine.resume(co)
+        if not ok then finish(false, "repack failed: " .. tostring(err)) return end
+        if coroutine.status(co) == "dead" then finish(true) end
+    end
+
+    timer.Create(tname, 0, 0, step)
+    step()
 end
