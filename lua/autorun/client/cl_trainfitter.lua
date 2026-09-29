@@ -355,8 +355,15 @@ local function ProcessQueue()
 
     timer.Simple(0, function()
         if finished then return end
-        local ok, err = pcall(steamworks.DownloadUGC, wsid, function(path, _file)
-            continueWithPath(path, "steamworks_native")
+        local ok, err = pcall(steamworks.DownloadUGC, wsid, function(path, f)
+            if finished then return end
+            local resolved, rerr = Trainfitter.ResolveUGCPath(wsid, path, f)
+            if not resolved then
+                MsgC(Color(255, 120, 120), "[Trainfitter] " .. wsid .. ": " .. tostring(rerr) .. "\n")
+                finish(false, tostring(rerr), "steamworks_native")
+                return
+            end
+            continueWithPath(resolved, "steamworks_native")
         end)
         if not ok then
             MsgC(Color(255, 120, 120),
@@ -904,24 +911,7 @@ net.Receive(NET.HostFetch, function()
     end
     if not steamworks or not isfunction(steamworks.DownloadUGC) then reply("") return end
     steamworks.DownloadUGC(wsid, function(path, f)
-        if not isstring(path) or path == "" then reply("") return end
-        if not string.find(path, ":", 1, true) and not string.find(path, "..", 1, true) and file.Exists(path, "GAME") then
-            reply(path)
-            return
-        end
-        if not f then reply("") return end
-        if not file.IsDir("trainfitter/http", "DATA") then file.CreateDir("trainfitter/http") end
-        local rel = "trainfitter/http/" .. wsid .. ".dat"
-        local out = file.Open(rel, "wb", "DATA")
-        if not out then reply("") return end
-        f:Seek(0)
-        while true do
-            local chunk = f:Read(4194304)
-            if not chunk or #chunk == 0 then break end
-            out:Write(chunk)
-        end
-        out:Close()
-        reply("data/" .. rel)
+        reply(Trainfitter.ResolveUGCPath(wsid, path, f, "trainfitter/http/" .. wsid .. ".dat"))
     end)
 end)
 

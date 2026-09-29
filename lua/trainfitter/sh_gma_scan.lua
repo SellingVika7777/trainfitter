@@ -484,6 +484,50 @@ function Trainfitter.CleanGMADir()
     return SERVER and "trainfitter/gmas" or "trainfitter/gmas_cl"
 end
 
+local RAW_COPY_CAP = 2 * 1024 * 1024 * 1024
+
+local function ReadableGamePath(p)
+    if not isstring(p) or p == "" or #p > 260 then return false end
+    if string.find(p, "..", 1, true) or string.find(p, ":", 1, true) or string.find(p, "\0", 1, true) then return false end
+    local first = string.sub(p, 1, 1)
+    if first == "/" or first == "\\" then return false end
+    return file.Exists(p, "GAME")
+end
+Trainfitter.ReadableGamePath = ReadableGamePath
+
+function Trainfitter.RawCopyPath(wsid)
+    return Trainfitter.CleanGMADir() .. "/raw_" .. wsid .. ".dat"
+end
+
+function Trainfitter.ResolveUGCPath(wsid, path, f, target)
+    if ReadableGamePath(path) then return path end
+    if not Trainfitter.IsValidWSID(wsid) then return nil, "invalid wsid" end
+    if not f or not isfunction(f.Read) then return nil, "downloaded GMA is not readable: " .. tostring(path) end
+    local size = isfunction(f.Size) and f:Size() or 0
+    if size < 20 then return nil, "downloaded GMA is empty" end
+    if size > RAW_COPY_CAP then return nil, "downloaded GMA is too large" end
+    local rel = target or Trainfitter.RawCopyPath(wsid)
+    if not file.IsDir("trainfitter", "DATA") then file.CreateDir("trainfitter") end
+    local dir = string.match(rel, "^(.+)/[^/]+$")
+    if dir and not file.IsDir(dir, "DATA") then file.CreateDir(dir) end
+    local out = file.Open(rel, "wb", "DATA")
+    if not out then return nil, "cannot write " .. rel end
+    f:Seek(0)
+    local written = 0
+    while written < size do
+        local chunk = f:Read(math.min(4194304, size - written))
+        if not chunk or #chunk == 0 then break end
+        out:Write(chunk)
+        written = written + #chunk
+    end
+    out:Close()
+    if written ~= size or file.Size(rel, "DATA") ~= size then
+        pcall(file.Delete, rel)
+        return nil, "cannot copy downloaded GMA"
+    end
+    return "data/" .. rel
+end
+
 function Trainfitter.CleanGMAName(wsid, report)
     local sig = {}
     for _, e in ipairs(report.entries) do
@@ -520,8 +564,13 @@ function Trainfitter.RepackGMA(srcPath, report, wsid, callback)
     header[#header + 1] = PackU32(0)
     local headerStr = table.concat(header)
     local expected = #headerStr + dataSize + 4
+    local rawCopy = Trainfitter.RawCopyPath(wsid)
+    local function dropRaw()
+        if srcPath == "data/" .. rawCopy then pcall(file.Delete, rawCopy) end
+    end
 
     if file.Exists(dst, "DATA") and file.Size(dst, "DATA") == expected then
+        dropRaw()
         callback("data/" .. dst)
         return
     end
@@ -565,6 +614,7 @@ function Trainfitter.RepackGMA(srcPath, report, wsid, callback)
         timer.Remove(tname)
         src:Close()
         out:Close()
+        dropRaw()
         if not ok then
             pcall(file.Delete, dst)
             callback(nil, err)

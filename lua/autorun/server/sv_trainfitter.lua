@@ -529,14 +529,6 @@ local function HostFetchGMA(wsid, callback)
     end)
 end
 
-local function ValidHostPath(p)
-    if not isstring(p) or p == "" or #p > 260 then return false end
-    if string.find(p, "..", 1, true) or string.find(p, ":", 1, true) or string.find(p, "\0", 1, true) then return false end
-    local first = string.sub(p, 1, 1)
-    if first == "/" or first == "\\" then return false end
-    return file.Exists(p, "GAME")
-end
-
 net.Receive(NET.HostFetched, function(len, ply)
     if len > 512 * 8 then return end
     if not IsValid(ply) or not ply:IsListenServerHost() then return end
@@ -546,7 +538,7 @@ net.Receive(NET.HostFetched, function(len, ply)
     if not waiters then return end
     hostFetchWaiters[wsid] = nil
     timer.Remove("Trainfitter.HostFetch." .. wsid)
-    local ok = ValidHostPath(path)
+    local ok = Trainfitter.ReadableGamePath(path)
     for _, cb in ipairs(waiters) do
         if ok then cb(path) else cb(nil, "host returned no usable path") end
     end
@@ -674,8 +666,12 @@ end
 
 local function safeNativeDownload(wsid, cb)
     timer.Simple(0, function()
-        local ok, err = pcall(steamworks.DownloadUGC, wsid, function(path, _f)
-            cb(path)
+        local ok, err = pcall(steamworks.DownloadUGC, wsid, function(path, f)
+            local resolved, rerr = Trainfitter.ResolveUGCPath(wsid, path, f)
+            if not resolved and path then
+                MsgC(Color(255, 120, 120), string.format("[Trainfitter] %s: %s\n", wsid, tostring(rerr)))
+            end
+            cb(resolved)
         end)
         if not ok then
             MsgC(Color(255, 120, 120), string.format(
