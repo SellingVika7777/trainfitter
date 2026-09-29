@@ -58,7 +58,6 @@ local lastStatusReq    = {}
 local lastAdminGet     = {}
 local lastReportSkins  = {}
 local lastNetGlobal    = {}
-local lastMetricsReq   = {}
 local lastCollectionReq = {}
 local lastResyncReq    = {}
 local lastLogsReq      = {}
@@ -1529,7 +1528,6 @@ local function PruneSessionState()
         end
     end
     for sid in pairs(lastNetGlobal) do if not onlineSids[sid] then lastNetGlobal[sid] = nil; removed = removed + 1 end end
-    for sid in pairs(lastMetricsReq) do if not onlineSids[sid] then lastMetricsReq[sid] = nil; removed = removed + 1 end end
     for _, t in ipairs({ lastCollectionReq, lastResyncReq, lastLogsReq }) do
         for sid in pairs(t) do if not onlineSids[sid] then t[sid] = nil; removed = removed + 1 end end
     end
@@ -1817,63 +1815,6 @@ net.Receive(NET.AdminManageList, function(len, ply)
     for _, p in ipairs(player.GetAll()) do
         if Trainfitter.CanManage(p) then SendAdminLists(p) end
     end
-end)
-
-net.Receive(NET.GetMetrics, function(_, ply)
-    if not IsValid(ply) then return end
-    local sid = ply:SteamID64() or "0"
-    local now = CurTime()
-    if lastMetricsReq[sid] and (now - lastMetricsReq[sid]) < 2 then return end
-    lastMetricsReq[sid] = now
-    if not Trainfitter.CanManage(ply) then return end
-
-    local function cnt(t)
-        local n = 0
-        for _ in pairs(t or {}) do n = n + 1 end
-        return n
-    end
-
-    local cacheN = 0
-    for _, dir in ipairs({ GMA_CACHE_DIR, HTTP_CACHE_DIR }) do
-        if file.IsDir(dir, "DATA") then
-            cacheN = cacheN + #(file.Find(dir .. "/*.dat", "DATA") or {})
-        end
-    end
-
-    local top = {}
-    for w, s in pairs(Trainfitter.Stats or {}) do
-        top[#top + 1] = { wsid = w, count = tonumber(s.count) or 0, title = s.title or "" }
-    end
-    table.sort(top, function(a, b) return a.count > b.count end)
-
-    local auditLines = {}
-    if file.Exists(AUDIT_FILE, "DATA") then
-        local all = string.Split(file.Read(AUDIT_FILE, "DATA") or "", "\n")
-        for i = math.max(1, #all - 8), #all do
-            if all[i] and all[i] ~= "" then auditLines[#auditLines + 1] = all[i] end
-        end
-    end
-
-    net.Start(NET.Metrics)
-    net.WriteUInt(#serverMountQueue, 16)
-    net.WriteUInt(cnt(Trainfitter.MountedServer), 16)
-    net.WriteUInt(cnt(Trainfitter.SessionBroadcast), 16)
-    net.WriteUInt(#Trainfitter.Persistent, 16)
-    net.WriteUInt(cnt(Trainfitter.Whitelist), 16)
-    net.WriteUInt(cnt(Trainfitter.Blacklist), 16)
-    net.WriteUInt(cacheN, 16)
-    net.WriteBool(ServerHasSteamworks())
-    local topN = math.min(#top, 5)
-    net.WriteUInt(topN, 8)
-    for i = 1, topN do
-        local t = top[i]
-        net.WriteString(string.sub((t.title ~= "" and t.title) or t.wsid, 1, 64))
-        net.WriteUInt(math.min(t.count, 65535), 16)
-    end
-    local aN = math.min(#auditLines, 8)
-    net.WriteUInt(aN, 8)
-    for i = 1, aN do net.WriteString(string.sub(auditLines[i], 1, 200)) end
-    net.Send(ply)
 end)
 
 local LOGS_MAX_PER_PAGE = 50

@@ -1093,66 +1093,6 @@ local function BuildSettingsView(parent)
         rows = {}
     end
 
-    local metricsRows = {}
-
-    local function ClearMetricsRows()
-        for _, r in ipairs(metricsRows) do if IsValid(r) then r:Remove() end end
-        metricsRows = {}
-    end
-
-    local function AddMetricLabel(text, font, col, tall, topMargin)
-        local lbl = vgui.Create("DLabel", scroll)
-        lbl:SetZPos(50)
-        lbl:Dock(TOP); lbl:SetTall(tall or 18); lbl:DockMargin(0, topMargin or 0, 0, 2)
-        lbl:SetFont(font or "Trainfitter.Small")
-        lbl:SetText(text)
-        lbl:SetTextColor(col or C.muted)
-        metricsRows[#metricsRows + 1] = lbl
-        return lbl
-    end
-
-    local function RefreshMetrics()
-        if not IsValid(scroll) then return end
-        ClearMetricsRows()
-
-        local cfg = Trainfitter.AdminConfig
-        local m   = Trainfitter.Metrics
-        if not (cfg and cfg.canManage and m) then return end
-
-        AddMetricLabel(Trainfitter.L("metrics_title"), "Trainfitter.H2", C.text, 26, 14)
-
-        AddMetricLabel(Trainfitter.L("metrics_line",
-            m.queue, m.mounted, m.broadcasts, m.persistent,
-            m.whitelist, m.blacklist, m.cache,
-            m.steamworks and Trainfitter.L("metrics_yes") or Trainfitter.L("metrics_no")),
-            "Trainfitter.Body", C.text, 20, 2)
-
-        if m.top and #m.top > 0 then
-            AddMetricLabel(Trainfitter.L("metrics_top"), "Trainfitter.Body", C.muted, 18, 6)
-            for _, t in ipairs(m.top) do
-                AddMetricLabel("  " .. t.count .. "x  " .. t.title, "Trainfitter.Small", C.text_dim, 16)
-            end
-        end
-
-        if m.audit and #m.audit > 0 then
-            AddMetricLabel(Trainfitter.L("metrics_audit"), "Trainfitter.Body", C.muted, 18, 6)
-            for _, line in ipairs(m.audit) do
-                AddMetricLabel("  " .. line, "Trainfitter.Mono", C.text_dim, 15)
-            end
-        end
-    end
-
-    local function PollRefreshMetrics()
-        if not IsValid(scroll) then return end
-        local saved = (IsValid(scroll.VBar) and scroll.VBar:GetScroll()) or 0
-        RefreshMetrics()
-        scroll:InvalidateLayout(true)
-        if IsValid(scroll.VBar) then scroll.VBar:SetScroll(saved) end
-        timer.Simple(0, function()
-            if IsValid(view) and IsValid(scroll.VBar) then scroll.VBar:SetScroll(saved) end
-        end)
-    end
-
     local function MakeRow(c)
         local row = vgui.Create("DPanel", scroll)
         row:Dock(TOP); row:SetTall(46); row:DockMargin(0, 0, 0, 6)
@@ -1407,8 +1347,6 @@ local function BuildSettingsView(parent)
             AddListSection("blacklist", Trainfitter.L("list_blacklist"))
         end
 
-        RefreshMetrics()
-
         scroll:InvalidateLayout(true)
 
         if IsValid(scroll.VBar) then scroll.VBar:SetScroll(savedScroll) end
@@ -1440,30 +1378,13 @@ local function BuildSettingsView(parent)
 
     hook.Add("Trainfitter.AdminConfigUpdated", view, ScheduleRebuild)
     hook.Add("Trainfitter.AdminListsUpdated",  view, ScheduleRebuild)
-    hook.Add("Trainfitter.MetricsUpdated",     view, PollRefreshMetrics)
     hook.Add("Trainfitter.SkinForgotten",      view, ScheduleRebuild)
     hook.Add("Trainfitter.ActiveSkinChanged",  view, ScheduleRebuild)
     hook.Add("Trainfitter.PersistentUpdated",  view, ScheduleRebuild)
     hook.Add("Trainfitter.AddonMounted",       view, ScheduleRebuild)
 
-    local function PollMetrics()
-        if not IsValid(view) then return end
-        local cfg = Trainfitter.AdminConfig
-        if view:IsVisible() and cfg and cfg.canManage and Trainfitter.GetMetrics then
-            Trainfitter.GetMetrics()
-        end
-    end
-    timer.Create("Trainfitter.MetricsPoll." .. tostring(view), 5, 0, function()
-        if not IsValid(view) then
-            timer.Remove("Trainfitter.MetricsPoll." .. tostring(view))
-            return
-        end
-        PollMetrics()
-    end)
-
     view.OnShowView = function()
         if Trainfitter.AdminGetConfig then Trainfitter.AdminGetConfig() end
-        PollMetrics()
     end
 
     return view

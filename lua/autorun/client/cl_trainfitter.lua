@@ -635,28 +635,6 @@ net.Receive(NET.AdminListData, function()
     hook.Run("Trainfitter.AdminListsUpdated", lists)
 end)
 
-net.Receive(NET.Metrics, function()
-    local m = {}
-    m.queue      = net.ReadUInt(16)
-    m.mounted    = net.ReadUInt(16)
-    m.broadcasts = net.ReadUInt(16)
-    m.persistent = net.ReadUInt(16)
-    m.whitelist  = net.ReadUInt(16)
-    m.blacklist  = net.ReadUInt(16)
-    m.cache      = net.ReadUInt(16)
-    m.steamworks = net.ReadBool()
-    local topN = net.ReadUInt(8)
-    m.top = {}
-    for i = 1, topN do
-        m.top[i] = { title = net.ReadString(), count = net.ReadUInt(16) }
-    end
-    local aN = net.ReadUInt(8)
-    m.audit = {}
-    for i = 1, aN do m.audit[i] = net.ReadString() end
-    Trainfitter.Metrics = m
-    hook.Run("Trainfitter.MetricsUpdated", m)
-end)
-
 net.Receive(NET.ServerStatus, function()
     local n = net.ReadUInt(4)
     for i = 1, n do
@@ -777,11 +755,6 @@ function Trainfitter.AdminManageList(listName, action, wsid)
     net.WriteString(listName)
     net.WriteString(action)
     net.WriteString(wsid)
-    net.SendToServer()
-end
-
-function Trainfitter.GetMetrics()
-    net.Start(NET.GetMetrics)
     net.SendToServer()
 end
 
