@@ -26,16 +26,26 @@ local real_isentity, real_IsValid, real_Color = isentity, IsValid, Color
 local real_string, real_table, real_math, real_bit = string, table, math, bit
 local real_hook_Add, real_hook_Remove = hook.Add, hook.Remove
 local real_timer = timer
+local real_include = include
 local MsgC = MsgC
+if istable(Trainfitter.SinkOriginals) then
+    CompileString = Trainfitter.SinkOriginals["_G.CompileString"] or CompileString
+    real_include = Trainfitter.SinkOriginals["_G.include"] or real_include
+end
 
 local HOOK_STEP = 1000
 local CALLBACK_BUDGET = 25000000
 local MEM_LIMIT_KB = 256 * 1024
 local CPU_WINDOW, CPU_SHARE = 5, 0.5
 local MEM_WINDOW, MEM_WINDOW_KB = 10, 512 * 1024
+local LIMITS = {
+    totalCpu = 0.6, memRetain = 256 * 1024, memAllow = 16 * 1024, nwKeys = 256, recipes = 64,
+    memCeiling = (jit and jit.arch == "x86") and 700 * 1024 or 2048 * 1024, memSuspect = 64 * 1024,
+}
 local MAX_HOOKS, MAX_TIMERS, MAX_SIMPLE, MAX_CSENTS = 64, 64, 256, 512
 local MAX_INCLUDE_DEPTH = 16
 local MAX_COPY_ENTRIES, MAX_COPY_DEPTH = 200000, 48
+local MAX_ENTS_PER_CALL, EDICT_CEILING = 512, 7680
 
 SB.Available = isfunction(setfenv) and isfunction(debug_sethook) and isfunction(debug_gethook)
     and isfunction(debug_getinfo) and isfunction(debug_getmetatable)
@@ -147,6 +157,43 @@ end
 local LOCKED_INDEX = {}
 for i = 1, #LOCKED_METAS do LOCKED_INDEX[i] = LockedIndex(LOCKED_METAS[i]) end
 
+local HEAP = { lastCeil = 0, all = setmetatable({}, { __mode = "k" }) }
+local GCPU = { t = 0, win = 0, per = {} }
+
+function HEAP.Floor()
+    if not HEAP.floor then
+        collectgarbage("collect")
+        HEAP.floor = collectgarbage("count")
+    end
+    return HEAP.floor
+end
+
+function HEAP.Check(sb)
+    local floor = HEAP.Floor()
+    collectgarbage("collect")
+    local heap = collectgarbage("count")
+    if heap < floor then HEAP.floor = heap floor = heap end
+    if heap - floor > LIMITS.memRetain then
+        sb:Kill("memory usage too high")
+    else
+        sb.memNet = 0
+    end
+end
+
+function HEAP.Ceiling(now)
+    if now - HEAP.lastCeil < 30 then return end
+    local floor = HEAP.Floor()
+    if collectgarbage("count") - floor < LIMITS.memCeiling then return end
+    HEAP.lastCeil = now
+    collectgarbage("collect")
+    if collectgarbage("count") - floor < LIMITS.memCeiling then return end
+    local worst, most = nil, LIMITS.memSuspect
+    for s in pairs(HEAP.all) do
+        if not s.dead and (s.memLife or 0) > most then worst, most = s, s.memLife end
+    end
+    if worst then worst:Kill("server memory is almost full") end
+end
+
 local function Enter(sb, budget, accounted)
     G.depth = G.depth + 1
     if G.depth == 1 then
@@ -159,6 +206,10 @@ local function Enter(sb, budget, accounted)
         G.t0 = SysTime()
         G.mem0 = collectgarbage("count")
         G.thread = coroutine_running()
+        G.entCount = 0
+        G.spawned = nil
+        G.entAbort = false
+        G.entKill = false
         G.strIndex = STRMETA.__index
         STRMETA.__index = SafeStrIndex
         G.lockedSaved = {}
@@ -179,9 +230,35 @@ local function Leave()
     for i = 1, #LOCKED_METAS do rawset(LOCKED_METAS[i], "__index", G.lockedSaved[i]) end
     local sb = G.sb
     G.sb = nil
+    if G.entAbort then
+        local spawned = G.spawned
+        G.spawned = nil
+        G.entAbort = false
+        if spawned then
+            for i = 1, #spawned do
+                if real_IsValid(spawned[i]) then spawned[i]:Remove() end
+            end
+        end
+        if G.entKill and sb then sb:Kill("too many entities created") end
+        G.entKill = false
+    end
+    G.spawned = nil
+    if sb and not sb.dead then
+        local now = SysTime()
+        local dm = collectgarbage("count") - G.mem0
+        sb.memLife = (sb.memLife or 0) + dm
+        sb.memNet = (sb.memNet or 0) + dm
+        if now - (sb.memDecay or 0) >= MEM_WINDOW then
+            sb.memNet = math_max(0, sb.memNet - LIMITS.memAllow)
+            sb.memDecay = now
+        end
+        if sb.memNet > LIMITS.memRetain then HEAP.Check(sb) end
+        if not sb.dead then HEAP.Ceiling(now) end
+    end
     if sb and G.accounted and not sb.dead then
         local now = SysTime()
-        sb.cpu = sb.cpu + (now - G.t0)
+        local dt = now - G.t0
+        sb.cpu = sb.cpu + dt
         local dm = collectgarbage("count") - G.mem0
         if dm > 0 then sb.mem = sb.mem + dm end
         if now - sb.cpuWin >= CPU_WINDOW then
@@ -192,6 +269,20 @@ local function Leave()
             if sb.mem > MEM_WINDOW_KB then sb:Kill("memory growth too high") end
             sb.mem, sb.memWin = 0, now
         end
+        if SERVER then
+            GCPU.t = GCPU.t + dt
+            GCPU.per[sb] = (GCPU.per[sb] or 0) + dt
+            if now - GCPU.win >= CPU_WINDOW then
+                if GCPU.t > CPU_WINDOW * LIMITS.totalCpu then
+                    local worst, most = nil, 0
+                    for s, v in pairs(GCPU.per) do
+                        if v > most and not s.dead then worst, most = s, v end
+                    end
+                    if worst then worst:Kill("total sandbox CPU usage too high") end
+                end
+                GCPU.t, GCPU.win, GCPU.per = 0, now, {}
+            end
+        end
     end
 end
 
@@ -199,6 +290,27 @@ local function Pack(...) return { n = select("#", ...), ... } end
 GUARD[Enter] = true
 GUARD[Leave] = true
 GUARD[Pack] = true
+
+if SERVER then
+    local getEdicts = ents.GetEdictCount
+    local function EntGuard(ent)
+        if G.depth == 0 or not G.sb then return end
+        G.entCount = (G.entCount or 0) + 1
+        local spawned = G.spawned
+        if not spawned then spawned = {} G.spawned = spawned end
+        spawned[#spawned + 1] = ent
+        if G.entAbort then return end
+        local tooMany = G.entCount > MAX_ENTS_PER_CALL
+        if tooMany or (getEdicts and getEdicts() >= EDICT_CEILING) then
+            G.entAbort = true
+            G.entKill = tooMany
+            if not G.killed then G.killed = tooMany and "too many entities created" or "server entity limit reached" end
+            debug_sethook(HookFn, "", 1)
+        end
+    end
+    GUARD[EntGuard] = true
+    hook.Add("OnEntityCreated", "Trainfitter.SandboxEntityGuard", EntGuard)
+end
 
 local function SafeError(e)
     if e == KILL then return G.killed or "sandbox execution limit exceeded" end
@@ -234,6 +346,14 @@ local TABLE_MT, RO_TABLE_MT, ENT_TABLE_MT, ENT_MT, UD_MT = {}, {}, {}, {}, {}
 
 local TABLE_KINDS = { table = true, rotable = true, enttable = true }
 local ENTITY_KINDS = { train = true, client = true, player = true, other = true, null = true }
+
+local function SafeAssetPath(p)
+    if type(p) ~= "string" or #p > 260 then return nil end
+    if string_find(p, "..", 1, true) or string_find(p, ":", 1, true) or string_find(p, "\0", 1, true) then return nil end
+    local c = string_sub(p, 1, 1)
+    if c == "/" or c == "\\" then return nil end
+    return p
+end
 
 local function MakeTableProxy(real, kind)
     local mt = TABLE_MT
@@ -283,6 +403,40 @@ local UD_METHODS = {
                   IsError = true, IsErrorTexture = true, GetNumAnimationFrames = true, GetColor = true },
 }
 
+local DENY_WRAP = setmetatable({}, { __mode = "k" })
+local DENY_GLOBALS = {
+    "string", "table", "math", "bit", "os", "io", "debug", "jit", "package", "coroutine", "utf8", "hook", "net",
+    "concommand", "util", "file", "http", "sql", "game", "engine", "ents", "player", "timer", "scripted_ents",
+    "weapons", "gmod", "cvars", "cookie", "duplicator", "constraint", "construct", "gamemode", "properties",
+    "usermessage", "umsg", "system", "physenv", "navmesh", "ai", "sound", "resource", "steamworks", "render",
+    "surface", "vgui", "gui", "input", "chat", "language", "spawnmenu", "presets", "list", "baseclass", "effects",
+    "team", "undo", "cleanup", "numpad", "drive", "GAMEMODE", "GM", "CAMI", "ULib", "ulx", "sam", "SAM",
+    "serverguard", "FAdmin", "evolve", "maestro", "Trainfitter", "MEL", "MetrostroiExtensionsLib", "Metrostroi",
+    "Turbostroi",
+}
+
+local function RefreshDenyWrap()
+    local function add(t) if type(t) == "table" then DENY_WRAP[t] = true end end
+    add(_R)
+    for i = 1, #DENY_GLOBALS do add(rawget(_R, DENY_GLOBALS[i])) end
+    local pkg = rawget(_R, "package")
+    if type(pkg) == "table" then add(rawget(pkg, "loaded")) end
+    if istable(hook) and isfunction(hook.GetTable) then add(hook.GetTable()) end
+    if istable(net) then add(rawget(net, "Receivers")) end
+    if istable(concommand) and isfunction(concommand.GetTable) then
+        local a, b = concommand.GetTable()
+        add(a) add(b)
+    end
+    local reg = debug and debug.getregistry and debug.getregistry()
+    if type(reg) == "table" then
+        add(reg)
+        for _, v in pairs(reg) do
+            if type(v) == "table" and type(rawget(v, "MetaName")) == "string" then add(v) end
+        end
+    end
+end
+SB.RefreshDenyWrap = RefreshDenyWrap
+
 local function IsEntTable(v)
     return type(rawget(v, "ClassName")) == "string" and (rawget(v, "Type") ~= nil or rawget(v, "Base") ~= nil)
 end
@@ -301,6 +455,7 @@ Wrap = function(v, ro)
     if tv == "nil" or tv == "boolean" or tv == "number" or tv == "string" then return v end
     if tv == "table" then
         if P2R[v] ~= nil or PROTECTED[v] then return v end
+        if DENY_WRAP[v] then return nil end
         if COLOR_META and debug_getmetatable(v) == COLOR_META then return CopyColor(v) end
         local kind = TableKindFor(v, ro)
         local p = (kind == "rotable") and R2P_RO[v] or R2P[v]
@@ -437,7 +592,8 @@ for _, k in ipairs({
     "CanEditVariables", "CanDrive", "SpawnFunction", "OnDuplicated", "PreEntityCopy", "PostEntityPaste",
     "PostEntityCopy", "OnEntityCopyTableFinish", "UpdateTransmitState", "AcceptInput", "KeyValue", "Use",
     "OnTakeDamage", "StartTouch", "Touch", "EndTouch", "SetOwner", "SetCreator", "CanPlayerEnter", "CanEnter",
-    "GetPlayer", "SetPlayer",
+    "GetPlayer", "SetPlayer", "Spawnable", "Editable", "PhysgunDisabled", "m_tblToolsAllowed", "DoNotDuplicate",
+    "DisableDuplicator",
 }) do BLOCKED_WRITE_KEYS[k] = true end
 local BLOCKED_WRITE_WORDS = { "owner", "cppi", "fpp", "creator", "steamid", "admin", "access", "permission", "protect" }
 
@@ -452,6 +608,49 @@ local function BlockedWriteKey(k)
 end
 SB.BlockedWriteKey = BlockedWriteKey
 
+local CheckSpawnerWrite
+do
+    local SPAWNER_ERR = "the train spawner can only create Metrostroi trains"
+
+    local function IsSpawnerTable(r)
+        if type(r) ~= "table" or not istable(scripted_ents) then return false end
+        for c, st in pairs(scripted_ents.GetList()) do
+            if IsSubwayClass(c) and type(st) == "table" and type(st.t) == "table" and rawget(st.t, "Spawner") == r then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function SpawnerClassOK(c)
+        return c == nil or IsSubwayClass(c)
+    end
+
+    local function FilterSpawnFunc(f)
+        if type(f) ~= "function" or RW2SFN[f] == nil then return f end
+        local g = function(...)
+            local c = f(...)
+            if IsSubwayClass(c) then return c end
+            error(SPAWNER_ERR, 2)
+        end
+        RW2SFN[g] = RW2SFN[f]
+        return g
+    end
+
+    CheckSpawnerWrite = function(r, rk, rv)
+        if rk == "head" or rk == "interim" then
+            if not SpawnerClassOK(rv) and IsSpawnerTable(r) then error(SPAWNER_ERR, 3) end
+        elseif rk == "spawnfunc" then
+            if IsSpawnerTable(r) then return FilterSpawnFunc(rv) end
+        elseif rk == "Spawner" and type(rv) == "table" then
+            if not SpawnerClassOK(rawget(rv, "head")) or not SpawnerClassOK(rawget(rv, "interim")) then error(SPAWNER_ERR, 3) end
+            local sf = rawget(rv, "spawnfunc")
+            if sf ~= nil then rawset(rv, "spawnfunc", FilterSpawnFunc(sf)) end
+        end
+        return rv
+    end
+end
+
 TABLE_MT.__index = function(p, k)
     local r = P2R[p]
     if r == nil then return nil end
@@ -463,7 +662,7 @@ TABLE_MT.__newindex = function(p, k, v)
     if r == nil then error("detached sandbox proxy", 2) end
     local rk = Unwrap(k)
     if rk == nil then error("table index is nil", 2) end
-    r[rk] = Unwrap(v)
+    r[rk] = CheckSpawnerWrite(r, rk, Unwrap(v))
 end
 TABLE_MT.__tostring = function() return "table: sandbox" end
 TABLE_MT.__metatable = false
@@ -484,7 +683,7 @@ ENT_TABLE_MT.__newindex = function(p, k, v)
     if r == nil then error("detached sandbox proxy", 2) end
     local rk = Unwrap(k)
     if rk == nil then error("table index is nil", 2) end
-    r[rk] = Unwrap(v)
+    r[rk] = CheckSpawnerWrite(r, rk, Unwrap(v))
 end
 ENT_TABLE_MT.__tostring = TABLE_MT.__tostring
 ENT_TABLE_MT.__metatable = false
@@ -560,6 +759,26 @@ for _, n in ipairs({
     "SetRenderMode", "SetRenderFX",
 }) do SERVER_TRAIN_METHODS[n] = true end
 
+local NW_SETTERS, MAT_SETTERS, CheckNW = {}, { SetMaterial = 1, SetSubMaterial = 2 }
+for n in pairs(SERVER_TRAIN_METHODS) do
+    if string_sub(n, 1, 5) == "SetNW" or string_sub(n, 1, 12) == "SetNetworked" then NW_SETTERS[n] = true end
+end
+do
+    local NW_SEEN = {}
+
+    CheckNW = function(key, value)
+        if type(key) ~= "string" or key == "" or #key > 64 then error("bad networked variable name", 3) end
+        if type(value) == "string" and #value > 1024 then error("networked value is too long", 3) end
+        if NW_SEEN[key] then return end
+        local sb = G.sb
+        if sb then
+            sb.nwKeys = (sb.nwKeys or 0) + 1
+            if sb.nwKeys > LIMITS.nwKeys then error("too many networked variable names", 3) end
+        end
+        NW_SEEN[key] = true
+    end
+end
+
 local function MethodAllowed(kind, k)
     if kind == "player" then return PLAYER_METHODS[k] end
     if READ_METHODS[k] then return true end
@@ -592,6 +811,18 @@ local function BoundMethod(p, e, kind, k)
             if p2 and PKIND[p2] == "enttable" then return p2 end
             return MakeTableProxy(t, "enttable")
         end
+    elseif SERVER and NW_SETTERS[k] then
+        f = function(_, key, value, ...)
+            CheckNW(key, value)
+            return WrapAll(target(e, key, UnwrapAll(value, ...)))
+        end
+    elseif SERVER and MAT_SETTERS[k] then
+        local idx = MAT_SETTERS[k]
+        f = function(_, ...)
+            local path = select(idx, ...)
+            if path ~= nil and (type(path) ~= "string" or not SafeAssetPath(path)) then error("bad material path", 2) end
+            return WrapAll(target(e, UnwrapAll(...)))
+        end
     else
         f = function(_, ...) return WrapAll(target(e, UnwrapAll(...))) end
     end
@@ -618,7 +849,7 @@ ENT_MT.__newindex = function(p, k, v)
     if BlockedWriteKey(k) then error("field '" .. tostring(k) .. "' of an entity cannot be changed from the sandbox", 2) end
     if not real_IsValid(e) then return end
     local t = e:GetTable()
-    if t then t[k] = Unwrap(v) end
+    if t then t[k] = CheckSpawnerWrite(t, k, Unwrap(v)) end
 end
 ENT_MT.__eq = function(a, b) return P2R[a] == P2R[b] end
 ENT_MT.__tostring = function(p) return tostring(P2R[p]) end
@@ -692,7 +923,10 @@ local function SbPairs(t)
             local k = keys[i]
             if k == nil then return nil end
             local v = rawget(src, k)
-            if v ~= nil then return Wrap(k, ro), Wrap(v, ro) end
+            if v ~= nil then
+                local wk = Wrap(k, ro)
+                if wk ~= nil then return wk, Wrap(v, ro) end
+            end
         end
     end, t, nil
 end
@@ -804,13 +1038,6 @@ local function CleanPath(p)
     return p
 end
 
-local function SafeAssetPath(p)
-    if type(p) ~= "string" or #p > 260 then return nil end
-    if string_find(p, "..", 1, true) or string_find(p, ":", 1, true) or string_find(p, "\0", 1, true) then return nil end
-    local c = string_sub(p, 1, 1)
-    if c == "/" or c == "\\" then return nil end
-    return p
-end
 
 local TRUSTED_INCLUDES = { "^metrostroi/extensions/constants/[%w_]+%.lua$" }
 
@@ -836,7 +1063,11 @@ local function HookAllowed(event)
 end
 
 SB.GameStarted = false
-hook.Add("InitPostEntity", "Trainfitter.SandboxGameStarted", function() SB.GameStarted = true end)
+hook.Add("InitPostEntity", "Trainfitter.SandboxGameStarted", function()
+    SB.GameStarted = true
+    RefreshDenyWrap()
+end)
+RefreshDenyWrap()
 
 local METRO_FN_SKIN = { AddSkin = true, AddLastStationTex = true, AddPassSchemeTex = true }
 local METRO_FN_MASK = {
@@ -857,6 +1088,8 @@ SANDBOX.__index = SANDBOX
 
 function SB.New(opts)
     opts = opts or {}
+    RefreshDenyWrap()
+    HEAP.Floor()
     local sb = setmetatable({
         id        = tostring(opts.id or "anon"),
         bodies    = opts.bodies or {},
@@ -877,6 +1110,7 @@ function SB.New(opts)
         currentDir = "",
         recipes = {},
     }, SANDBOX)
+    HEAP.all[sb] = true
     return sb
 end
 
@@ -908,6 +1142,10 @@ function SANDBOX:Kill(reason)
     self.stopped = true
     MsgC(Color(255, 110, 110), "[Trainfitter:" .. self.id .. "] sandbox disabled: " .. tostring(reason) .. "\n")
     self:Cleanup()
+    for _, env in pairs(self.envs) do
+        for k in pairs(env) do rawset(env, k, nil) end
+    end
+    self.bodies = {}
 end
 
 function SANDBOX:Stop()
@@ -1101,13 +1339,48 @@ function SANDBOX:BuildMetrostroiView(fnSet)
     return view
 end
 
+local MEL_GUARDED = setmetatable({}, { __mode = "k" })
+
+local function MELTargetClass(v)
+    if type(v) == "string" then return v end
+    if type(v) == "table" then return rawget(v, "entclass") or rawget(v, "ClassName") end
+    if real_isentity(v) and real_IsValid(v) then return v:GetClass() end
+end
+
+local function GuardMEL(mel)
+    local function guard(name, check)
+        local orig = rawget(mel, name)
+        if type(orig) ~= "function" or MEL_GUARDED[orig] then return end
+        local g = function(...)
+            if G.depth > 0 then check(...) end
+            return orig(...)
+        end
+        MEL_GUARDED[g] = true
+        rawset(mel, name, g)
+    end
+    local function classCheck(v)
+        if not IsMetroClass(MELTargetClass(v)) then error("MEL cannot target this entity class from a sandboxed addon", 4) end
+    end
+    local function nameCheck(fname)
+        if type(fname) ~= "string" or BlockedWriteKey(fname) then error("MEL cannot inject into this function from a sandboxed addon", 4) end
+    end
+    guard("getEntTable", function(c) classCheck(c) end)
+    for _, n in ipairs({ "InjectIntoServerFunction", "InjectIntoClientFunction", "InjectIntoSharedFunction" }) do
+        guard(n, function(v, fname) classCheck(v) nameCheck(fname) end)
+    end
+    guard("InjectIntoSystemFunction", function(_, fname) nameCheck(fname) end)
+end
+
 function SANDBOX:BuildMELView()
     local sb = self
+    local MEL_WRITABLE = { RecipeSpecific = true }
+    if istable(_R.MEL) then GuardMEL(_R.MEL) end
     local overrides = {}
     overrides.DefineRecipe = function(name, trainType)
         if type(name) ~= "string" or #name > 64 or not string_match(name, "^[%w_%-%.]+$") then
             error("invalid recipe name", 2)
         end
+        if #sb.recipes >= LIMITS.recipes then error("too many recipes in one addon", 2) end
         local cls
         local rt = Unwrap(trainType)
         local mel = _R.MEL
@@ -1146,11 +1419,16 @@ function SANDBOX:BuildMELView()
             local mel = _R.MEL
             if not istable(mel) then return nil end
             if overrides[k] then return overrides[k] end
-            return Wrap(mel[k])
+            local v = mel[k]
+            if type(v) == "table" and not MEL_WRITABLE[k] then return Wrap(v, true) end
+            return Wrap(v)
         end,
         __newindex = function(_, k, v)
             local mel = _R.MEL
             if not istable(mel) or overrides[k] or type(k) ~= "string" then error("cannot modify MEL here", 2) end
+            if rawget(mel, k) ~= nil then
+                error("MEL." .. k .. " cannot be replaced from a sandboxed addon", 2)
+            end
             mel[k] = Unwrap(v)
         end,
         __metatable = false,
@@ -1166,8 +1444,12 @@ local function ConVarView(name)
         or string_sub(low, 1, 4) == "mel_" or string_sub(low, 1, 5) == "gmod_") then
         return nil
     end
+    for _, w in ipairs({ "password", "passwd", "token", "secret", "apikey", "api_key", "webhook", "mysql", "database", "rcon" }) do
+        if string_find(low, w, 1, true) then return nil end
+    end
     local cv = GetConVar(name)
     if not cv then return nil end
+    if FCVAR_PROTECTED and cv:IsFlagSet(FCVAR_PROTECTED) then return nil end
     local view = {}
     for _, m in ipairs({ "GetInt", "GetFloat", "GetBool", "GetString", "GetName", "GetDefault", "GetHelpText", "GetMin", "GetMax" }) do
         view[m] = function() return cv[m](cv) end
@@ -1205,7 +1487,21 @@ function SANDBOX:BuildEnv(level)
 
     local base = {
         type = SbType, tostring = tostring, tonumber = tonumber, pairs = SbPairs, ipairs = SbIpairs, next = SbNext,
-        select = select, unpack = SbUnpack, rawequal = rawequal, error = error, assert = assert,
+        select = select, unpack = SbUnpack, rawequal = rawequal,
+        error = function(e, level)
+            if type(e) == "table" and P2R[e] == nil then e = SafeError(e) end
+            level = tonumber(level) or 1
+            if level > 0 then level = level + 1 end
+            error(e, level)
+        end,
+        assert = function(v, msg, ...)
+            if not v then
+                if msg == nil then msg = "assertion failed!" end
+                if type(msg) == "table" and P2R[msg] == nil then msg = SafeError(msg) end
+                error(msg, 0)
+            end
+            return v, msg, ...
+        end,
         Format = string_format, SortedPairs = SbSortedPairs,
         SortedPairsByValue = function(t, desc)
             local items = {}
@@ -1272,7 +1568,17 @@ function SANDBOX:BuildEnv(level)
             return unpack(res, 1, res.n)
         end,
         xpcall = function(f, handler, ...)
-            local res = Pack(xpcall(f, handler, ...))
+            local h = handler
+            if type(handler) == "function" then
+                h = function(e)
+                    if type(e) == "table" and P2R[e] == nil then
+                        local mt = debug_getmetatable(e)
+                        if mt ~= nil and not SBMT[mt] then e = Wrap(e) end
+                    end
+                    return handler(e)
+                end
+            end
+            local res = Pack(xpcall(f, h, ...))
             if G.killed then error(KILL, 0) end
             return unpack(res, 1, res.n)
         end,
@@ -1461,7 +1767,7 @@ function SANDBOX:Include(path, level)
         end
     end
     if TrustedInclude(p) and file.Exists(p, "LUA") then
-        return WrapAll(include(p))
+        return WrapAll(real_include(p))
     end
     error("include blocked: " .. p, 2)
 end
@@ -1490,6 +1796,49 @@ GUARD[SANDBOX.RunFile] = true
 GUARD[SANDBOX.ExecBody] = true
 GUARD[SANDBOX.Include] = true
 GUARD[SafeError] = true
+
+if SERVER then (function()
+    local ORIG = Trainfitter.SinkOriginals or {}
+    Trainfitter.SinkOriginals = ORIG
+    local SINK_ERR = " cannot be used while a sandboxed addon is running"
+
+    local function GuardSink(tbl, tname, name, allow)
+        if type(tbl) ~= "table" then return end
+        local key = tname .. "." .. name
+        local orig = ORIG[key]
+        if orig == nil then
+            orig = rawget(tbl, name)
+            if type(orig) ~= "function" then return end
+            ORIG[key] = orig
+        end
+        rawset(tbl, name, function(...)
+            if G.depth > 0 and not (allow and allow(...)) then error(name .. SINK_ERR, 2) end
+            return orig(...)
+        end)
+    end
+
+    local function ReadMode(_, mode)
+        return type(mode) == "string" and not string_find(mode, "[wa%+]")
+    end
+    local function SelectOnly(q)
+        return type(q) == "string" and string_match(q, "^%s*[Ss][Ee][Ll][Ee][Cc][Tt]%s") ~= nil and not string_find(q, ";", 1, true)
+    end
+
+    for _, n in ipairs({ "RunString", "RunStringEx", "CompileString", "CompileFile", "BroadcastLua", "HTTP" }) do
+        GuardSink(_R, "_G", n)
+    end
+    GuardSink(_R, "_G", "include", function(p) return type(p) == "string" and TrustedInclude(p) end)
+    GuardSink(_R, "_G", "AddCSLuaFile", function(p) return p == nil end)
+    GuardSink(_R, "_G", "RunConsoleCommand", function(cmd) return cmd == "say" end)
+    GuardSink(game, "game", "ConsoleCommand")
+    GuardSink(game, "game", "CleanUpMap")
+    GuardSink(util, "util", "AddNetworkString")
+    GuardSink(sql, "sql", "Query", SelectOnly)
+    GuardSink(file, "file", "Open", ReadMode)
+    for _, n in ipairs({ "Write", "Append", "Delete", "Rename" }) do GuardSink(file, "file", n) end
+    local PLAYER = FindMetaTable("Player")
+    for _, n in ipairs({ "SendLua", "SetUserGroup", "ConCommand", "Ban", "Kick" }) do GuardSink(PLAYER, "Player", n) end
+end)() end
 
 SB.Wrap = Wrap
 SB.Unwrap = function(v) return Unwrap(v) end
