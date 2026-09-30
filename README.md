@@ -118,9 +118,9 @@
 
 ### Права
 
-Четыре прайвилегии: `trainfitter_download` (user), `trainfitter_persistent` (admin), `trainfitter_manage` (superadmin), `trainfitter_logs` (admin)
+Четыре привилегии: `trainfitter_download` (user), `trainfitter_persistent` (admin), `trainfitter_manage` (superadmin), `trainfitter_logs` (admin)
 
-Trainfitter спрашивает твою админку: **ULX / SAM / ServerGuard / FAdmin (DarkRP) / Maestro** подхватываются автоматом через **CAMI** - прайвилегии сами появятся в их меню, выдавай/отзывай группам там. Плюс отдельно поддержаны LFAdmin и evolve. Нет админки - падает на `IsAdmin()` / `IsSuperAdmin()`. Хост listen-сервера всегда босс
+Trainfitter спрашивает твою админку: **ULX / SAM / ServerGuard / FAdmin (DarkRP) / Maestro** подхватываются автоматом через **CAMI** - привилегии сами появятся в их меню, выдавай/отзывай группам там. Плюс отдельно поддержаны LFAdmin и evolve. Нет админки - падает на `IsAdmin()` / `IsSuperAdmin()`. Хост listen-сервера всегда босс
 
 Своя самописная админка ? Регай свой провайдер одной строкой:
 ```lua
